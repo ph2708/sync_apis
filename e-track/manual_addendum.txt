@@ -1,0 +1,34 @@
+Instruções rápidas - atualizações ao coletor
+
+1) Gerar rotas do dia para todas as placas (padrão):
+
+   python collector.py --compute-routes-current-day-all
+
+   - O coletor tentará descobrir placas via os endpoints `ultimas-posicoes` (várias variantes).
+   - Se a API não expor esse endpoint nesta instalação, o coletor agora faz um fallback para usar as placas já presentes na tabela `positions` do banco de dados.
+
+2) Forçar uma lista de placas a partir de um arquivo:
+
+   python collector.py --compute-routes-current-day-all --plates-file /caminho/para/placas.txt
+
+   - Arquivo: uma placa por linha, sem cabeçalho.
+
+3) Forçar uma lista de placas inline:
+
+   python collector.py --compute-routes-current-day-all --plates "ABC1D23,XYZ9Z99"
+
+4) Comportamento quando nada é encontrado:
+
+   - Se nem a descoberta via API nem a lista de placas no banco retornarem resultados, o comando emitirá um aviso e não tentará processar placas.
+
+5) Como depurar se não houve processamento:
+
+   - Defina `ETRAC_LOG_LEVEL=DEBUG` para ver logs de tentativa dos endpoints e do fallback ao banco.
+   - Verifique se há placas no banco:
+
+     psql -h 127.0.0.1 -p 5433 -U etrack -d e_track -c "SELECT DISTINCT placa FROM positions LIMIT 50;"
+
+Observações:
+
+- Essa abordagem evita abortar o processamento quando a instalação da API usa caminhos diferentes dos exemplificados na documentação.
+- Se preferir, eu posso tentar novamente atualizar `manual.txt` diretamente ou mover o conteúdo para o README principal. Diga qual prefere.

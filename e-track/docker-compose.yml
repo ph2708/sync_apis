@@ -1,0 +1,15 @@
+version: '3.8'
+services:
+  db:
+    image: postgres:15
+    container_name: e_track_db
+    environment:
+      POSTGRES_USER: etrack
+      POSTGRES_PASSWORD: etrack_pass
+      POSTGRES_DB: e_track
+    volumes:
+      - e_track_pgdata:/var/lib/postgresql/data
+    ports:
+      - "5433:5432"
+volumes:
+  e_track_pgdata:

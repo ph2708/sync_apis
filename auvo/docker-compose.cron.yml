@@ -1,0 +1,18 @@
+version: '3.8'
+services:
+  migrate-cron:
+    build:
+      context: .
+      dockerfile: docker/migration-cron/Dockerfile
+    image: auvo-migration-cron:latest
+    restart: always
+    environment:
+      PGHOST: db
+      PGPORT: 5432
+      PGUSER: auvo
+      PGPASSWORD: auvo_pass
+      PGDATABASE: auvo
+    depends_on:
+      - db
+    volumes:
+      - ./:/app:ro

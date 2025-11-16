@@ -1,0 +1,11 @@
+.env
+*.pyc
+__pycache__/
+
+# Virtual environments - common names
+.venv/
+venv/
+env/
+ENV/
+pip-wheel-metadata/
+.python-version

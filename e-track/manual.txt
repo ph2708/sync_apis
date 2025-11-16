@@ -1,0 +1,130 @@
+Com base no arquivo enviado "eTrac __.mhtml", aqui está o documento de texto contendo todos os dados da documentação da API WebService 1.1 da eTrac.
+
+---
+
+# Documentação da API eTrac - Web Service 1.1
+
+[cite_start]Esta documentação detalha os endpoints disponíveis para monitoramento de frota via API[cite: 195300].
+
+## Configuração Geral
+
+**Header de Autorização:**
+Todos os endpoints utilizam autenticação do tipo **Basic Auth**.
+* **Username:** e-mail de acesso à plataforma eTrac.
+* [cite_start]**Password:** Chave API gerada no usuário da plataforma eTrac[cite: 195304].
+
+---
+
+## 1. POST - Últimas Posições da Frota
+
+Recupera as últimas posições de todos os veículos da frota.
+
+* [cite_start]**URL:** `http://api.etrac.com.br/monitoramento/ultimas-posicoes` [cite: 195303]
+* **Método:** POST
+
+### Parâmetros de Retorno (Modelo de Dados do Veículo)
+[cite_start]Estes campos estão contidos no objeto JSON retornado [cite: 195310, 195313-195367]:
+
+* **placa** (String): Placa do Veículo.
+* **descricao** (String): Descrição do Terminal.
+* **frota** (String): Frota do Terminal.
+* **equipamento_serial** (String): Serial do equipamento do terminal.
+* **data_transmissao** (String): Data da Transmissão do pacote.
+* **data_gravacao** (String): Data da Gravação do pacote.
+* **latitude** (String): Latitude do terminal.
+* **longitude** (String): Longitude do terminal.
+* **logradouro** (int): Logradouro da posição do terminal.
+* **velocidade** (int): Velocidade (km/h).
+* **ignicao** (int): Status da Ignição (1 - ligado; 0 - desligado).
+* **odometro** (int): Odômetro em km (caso o equipamento entregue esse dado).
+* **odometro_can** (int): Odômetro via Can em Km (caso o equipamento entregue esse dado).
+* **horimetro** (int): Horímetro em horas (caso o equipamento entregue esse dado).
+* **bateria** (number): Bateria em Volts (ou indicador: 1-Boa, 0-Alerta para GlobalStar).
+
+### Respostas
+
+* **Sucesso:**
+    * [cite_start]`retorno` (String JSON): Lista de parâmetros por Terminal[cite: 195372].
+    * [cite_start]`code_header` (String): Código de sucesso[cite: 195377].
+* **Erro:**
+    * [cite_start]`erro` (String): Mensagem com erro encontrado[cite: 195384].
+    * [cite_start]`code_header` (String): Código do erro encontrado[cite: 195388].
+
+---
+
+## 2. POST - Última Posição por Terminal
+
+Recupera a última posição de um veículo específico.
+
+* [cite_start]**URL:** `http://api.etrac.com.br/monitoramento/ultimaposicao` [cite: 195394]
+* **Método:** POST
+
+### Parâmetros de Entrada (Body)
+* [cite_start]Formato JSON: `{"placa":"XXX-XXXX"}` ou `{"placa":"XXXXXXX"}`[cite: 195396].
+
+### Parâmetros de Retorno (Modelo de Dados)
+* [cite_start]Os campos retornados são os mesmos do endpoint "Últimas Posições da Frota" (placa, descricao, frota, latitude, longitude, ignicao, odometro, etc.) [cite: 195405-195459].
+
+### Respostas
+* [cite_start]**Sucesso:** `retorno` (Lista de parâmetros por Terminal) e `code_header` [cite: 195464-195468].
+* [cite_start]**Erro:** `erro` (Mensagem de erro) e `code_header` [cite: 195476-195479].
+
+---
+
+## 3. POST - Últimas Posições do Terminal
+
+Recupera o histórico de posições de um veículo em um período.
+
+* [cite_start]**URL:** `http://api.etrac.com.br/monitoramento/ultimasposicoesterminal` [cite: 195486]
+* **Método:** POST
+
+### Parâmetros de Entrada (Body)
+[cite_start]Existem duas formas de filtrar[cite: 195488]:
+1.  **Dia completo:** `{"placa":"XXX-XXXX", "data":"DD/MM/YYYY"}`
+2.  **Período de 24h:** `{"placa":"XXX-XXXX", "data_inicio":"DD/MM/YYYY horas:minutos:segundos", "data_fim":"DD/MM/YYYY horas:minutos:segundos"}`
+
+### [cite_start]Parâmetros de Retorno (Dados da Posição) [cite: 195498-195544]
+* **placa**, **descricao**, **frota**
+* **data_transmissao**, **latitude**, **longitude**
+* **logradouro**, **velocidade**, **ignicao**
+* **odometro**, **odometro_can**, **horimetro**, **bateria**
+
+### Respostas
+* [cite_start]**Sucesso:** [cite: 195550-195566]
+    * `terminal` (String JSON): Informações do terminal (placa, descricao, frota).
+    * `posicoes` (String JSON): Lista de posições do terminal.
+    * `code_header` (String): Código de sucesso.
+* [cite_start]**Erro:** `erro` e `code_header` [cite: 195573-195577].
+
+---
+
+## 4. POST - Resumo de Viagens
+
+Recupera o resumo das viagens de um veículo em uma data específica.
+
+* [cite_start]**URL:** `http://api.etrac.com.br/monitoramento/resumoviagens` [cite: 195583]
+* **Método:** POST
+
+### Parâmetros de Entrada (Body)
+* [cite_start]Formato JSON: `{"placa":"XXX-XXXX", "data":"DD-MM-YYYY"}`[cite: 195585].
+
+### [cite_start]Parâmetros de Retorno (Detalhes da Viagem) [cite: 195595-195662]
+* **cliente** (String): Nome do Cliente.
+* **cliente_fantasia** (String): Nome Fantasia do Cliente.
+* **placa**, **descricao**, **frota**
+* **data_inicio_conducao** (String): Data e Hora do Início da Condução.
+* **data_fim_conducao** (String): Data e Hora do Fim da Condução.
+* **latitude_inicio_conducao**, **latitude_fim_conducao**
+* **longitude_inicio_conducao**, **longitude_fim_conducao**
+* **localizacao_inicio_conducao**: Localização do Início.
+* **localizacao_fim_conducao**: Localização do Fim.
+* **odometro_inicio_conducao** (String): Odômetro inicial (km).
+* **odometro_fim_conducao** (String): Odômetro final (km).
+* **duracao_conducao** (String): Formato 00:00:00.
+* **distancia_conducao** (String): Distância percorrida (km).
+* **condutor_nome** (String): Nome do condutor (se identificado).
+* **condutor_identificacao** (String): Identificação do condutor.
+
+### Respostas
+* [cite_start]**Sucesso:** `retorno` (Lista de parâmetros) e `code_header` [cite: 195667-195671].
+* [cite_start]**Erro:** `erro` e `code_header` [cite: 195679-195683].
