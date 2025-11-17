@@ -1,6 +1,11 @@
 -- Migration script: add normalized columns and backfill from JSONB `data`.
--- Run once: docker-compose exec -T db psql -U auvo -d auvo -f migrate_schema.sql
+-- Ensure this migration runs inside the dedicated `auvo` schema so the project
+-- objects don't pollute the public schema when sharing the same database with
+-- other projects (for example `e-track`).
+CREATE SCHEMA IF NOT EXISTS auvo;
+SET search_path = auvo, public;
 
+-- Run once: docker-compose exec -T db psql -U auvo -d <db> -f migrate_schema.sql
 BEGIN;
 
 -- USERS: add normalized columns

@@ -3,6 +3,19 @@
 Este projeto sincroniza recursos da API Auvo para um banco PostgreSQL, armazena o JSON bruto em `data` (JSONB)
 e popula colunas normalizadas para facilitar consultas e integrações.
 
+Schema e organização do banco
+--------------------------------
+- Para evitar poluir o schema `public` quando o mesmo banco é usado por
+	múltiplos projetos, este projeto usa um schema próprio chamado `auvo`.
+	As migrations e a inicialização criam `auvo` automaticamente e definem
+	`search_path = auvo, public` — isto garante que as tabelas e índices do
+	projeto ficam em `auvo` enquanto ainda é possível consultar objetos do
+	`public` quando necessário.
+
+- O outro projeto neste repositório, `e-track`, usa o schema `e_track`.
+	Assim ambos os projetos podem ser carregados no mesmo banco Postgres sem
+	conflito, cada um no seu schema.
+
 Resumo rápido
 - Autentica na API Auvo (/login) e busca recursos paginados (`/users`, `/tasks`, `/customers`).
 - Persiste objetos na tabela correspondente (`users`, `tasks`, `customers`) com `data` (JSONB) e colunas normalizadas.
@@ -37,7 +50,8 @@ docker-compose ps
 
 ```bash
 # conecta ao Postgres e aplica migrate_schema.sql (ajuste variáveis se necessário)
-PGHOST=localhost PGPORT=5432 PGUSER=auvo PGPASSWORD=auvo_pass PGDATABASE=auvo \
+# a migration já cria o schema `auvo` e aplica `search_path = auvo, public`.
+PGHOST=localhost PGPORT=5432 PGUSER=auvo PGPASSWORD=auvo_pass PGDATABASE=<db> \
 python3 run_migration.py
 
 # ou usando o wrapper
