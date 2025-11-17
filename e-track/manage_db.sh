@@ -36,7 +36,8 @@ function wait_ready() {
 
 case ${1-} in
   up)
-    docker-compose up -d db
+    # Use the centralized DB compose at repository root
+    docker-compose -f ../db/docker-compose.yml up -d db
     wait_ready
     ;;
   down)
@@ -51,7 +52,7 @@ case ${1-} in
     PGPASSWORD="$PGPASSWORD" psql "postgresql://$PGUSER:$PGHOST:$PGPORT/$PGDATABASE" -f schema.sql
     ;;
   init)
-    docker-compose up -d db
+    docker-compose -f ../db/docker-compose.yml up -d db
     wait_ready
     echo "Aplicando schema..."
     PGPASSWORD="$PGPASSWORD" psql "postgresql://$PGUSER:$PGHOST:$PGPORT/$PGDATABASE" -f schema.sql

@@ -80,6 +80,79 @@ Observação sobre a UI
 - A UI agora exibe automaticamente as colunas normalizadas (por exemplo `name`, `email` para `users`; `task_id`, `task_date` para `tasks`; `customer_name`, `address` para `customers`) quando essas colunas existirem no banco.
 - Se você ainda não aplicou `migrate_schema.sql`, execute a migração para adicionar e backfill das colunas normalizadas. Após aplicar a migração as colunas aparecerão na lista e na visualização detalhada.
 
+Observação importante
+---------------------
+Este projeto faz parte do monorepo `sync_apis`. A documentação principal e as
+instruções de bootstrap do banco estão no README da raiz (`../README.md`).
+Por favor, consulte o README raiz para instruções sobre como subir o Postgres
+central e aplicar todas as migrations. Use o helper `db/apply-all-migrations.sh`
+para aplicar rapidamente as migrations de `auvo` e `e-track`.
+
+Arquivos principais (resumo)
+- `migrate_schema.sql` — adiciona colunas normalizadas e faz backfill a partir do JSONB `data`.
+- `init_db.sql` — SQL de inicialização opcional (ex.: metadados, extensões).
+- `run_migration.py` / `run_migration.sh` — runner para aplicar a migration usando variáveis de ambiente PG*.
+- `auvo_sync.py` — sincronizador principal (fetch/persist).
+- `web_ui.py` — UI leve para explorar os dados localmente (porta 5000).
+
+Comandos úteis (resumo)
+- Subir o DB central (na raiz do repositório):
+	```bash
+	docker compose -f db/docker-compose.yml up -d
+	```
+- Aplicar a migration do Auvo diretamente (exemplo):
+	```bash
+	PGPASSWORD=sync_pass psql -h 127.0.0.1 -U sync_user -d sync_apis -f auvo/migrate_schema.sql
+	```
+- Rodar o sincronizador (após configurar as variáveis de ambiente):
+	```bash
+	python3 auvo/auvo_sync.py --db-wait 2
+	```
+
+Manual passo-a-passo (Auvo)
+1) Preparar variáveis de ambiente
+```bash
+cp .env.example .env
+# editar .env (ou usar o .env na raiz) para ajustar PGHOST/PGPORT/PGUSER/PGPASSWORD
+```
+
+2) Subir o Postgres central (de dentro do repositório raiz)
+```bash
+docker compose -f db/docker-compose.yml up -d
+```
+
+3) Aplicar schema + migration do Auvo
+```bash
+./db/apply-all-migrations.sh
+```
+
+4) Verificar se as tabelas do Auvo foram criadas
+```bash
+docker compose -f db/docker-compose.yml exec -T db psql -U sync_user -d sync_apis -c "\dt auvo.*"
+```
+
+5) Rodar sincronização (após configurar credenciais AUVO_API_KEY/..)
+```bash
+python3 auvo/auvo_sync.py --db-wait 2
+```
+
+6) Abrir UI local
+```bash
+python3 auvo/web_ui.py
+# abrir http://127.0.0.1:5000
+```
+
+Reset seguro de tabelas Auvo (truncar)
+- Para truncar as tabelas `users`, `tasks`, `customers` use o utilitário:
+	```bash
+	cd auvo
+	./reset-db.sh --yes
+	```
+	Isso usará as variáveis PG* do ambiente e truncará as tabelas qualificado pelo schema `auvo`.
+Seção de troubleshooting rápido
+- Se `run_migration.py` reclamar de falta de conexão, verifique as variáveis PG* e se o contêiner Postgres está rodando (`docker compose -f db/docker-compose.yml ps`).
+- Se as colunas normalizadas não aparecerem na UI, confirme que a migration foi aplicada e que as colunas existem em `auvo.<table>`.
+
 Resetar o banco (apagar dados e re-sincronizar)
 - Se quiser apagar os dados atuais e re-sincronizar do zero, use o utilitário `reset_db.py`.
 - AVISO: isso irá remover TODOS os registros das tabelas selecionadas.

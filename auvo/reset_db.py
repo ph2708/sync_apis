@@ -14,12 +14,14 @@ import psycopg2
 
 
 def pg_connect():
+    # Prefer explicit DSN, otherwise read PG* env vars with fallbacks to the
+    # monorepo centralized defaults. Allow AUVO_* overrides if present.
     dsn = os.getenv('PG_DSN') or os.getenv('AUVO_PG_DSN')
-    host = os.getenv('PGHOST') or os.getenv('AUVO_PG_HOST', 'localhost')
-    port = os.getenv('PGPORT') or os.getenv('AUVO_PG_PORT', '5432')
-    db = os.getenv('PGDATABASE') or os.getenv('AUVO_PG_DB')
-    user = os.getenv('PGUSER') or os.getenv('AUVO_PG_USER')
-    pwd = os.getenv('PGPASSWORD') or os.getenv('AUVO_PG_PASSWORD')
+    host = os.getenv('PGHOST') or os.getenv('AUVO_PG_HOST') or '127.0.0.1'
+    port = os.getenv('PGPORT') or os.getenv('AUVO_PG_PORT') or '5432'
+    db = os.getenv('PGDATABASE') or os.getenv('AUVO_PG_DB') or 'sync_apis'
+    user = os.getenv('PGUSER') or os.getenv('AUVO_PG_USER') or 'sync_user'
+    pwd = os.getenv('PGPASSWORD') or os.getenv('AUVO_PG_PASSWORD') or 'sync_pass'
     if dsn:
         return psycopg2.connect(dsn)
     missing = []
@@ -59,22 +61,25 @@ def main():
     try:
         # show counts before
         counts = {}
+        schema = os.getenv('AUVO_SCHEMA', 'auvo')
         for t in args.tables:
-            cur.execute(f"SELECT COUNT(*) FROM {t}")
+            cur.execute(f"SELECT COUNT(*) FROM {schema}.{t}")
             counts[t] = cur.fetchone()[0]
         print('Counts before truncation:')
         for t, c in counts.items():
             print(f'  {t}: {c}')
 
         # perform truncate
-        tbls = ', '.join(args.tables)
+        # Truncate schema-qualified tables to avoid accidental truncation of
+        # tables in other schemas.
+        tbls = ', '.join(f"{schema}.{t}" for t in args.tables)
         cur.execute(f"TRUNCATE TABLE {tbls} RESTART IDENTITY CASCADE")
         conn.commit()
 
         # show counts after
         after = {}
         for t in args.tables:
-            cur.execute(f"SELECT COUNT(*) FROM {t}")
+            cur.execute(f"SELECT COUNT(*) FROM {schema}.{t}")
             after[t] = cur.fetchone()[0]
         print('Counts after truncation:')
         for t, c in after.items():

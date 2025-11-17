@@ -7,11 +7,14 @@ services:
     image: auvo-migration-cron:latest
     restart: always
     environment:
+      # Configure to use the centralized DB. When starting this service
+      # together with the central DB compose, use:
+      # docker compose -f db/docker-compose.yml -f auvo/docker-compose.cron.yml up -d
       PGHOST: db
       PGPORT: 5432
-      PGUSER: auvo
-      PGPASSWORD: auvo_pass
-      PGDATABASE: auvo
+      PGUSER: sync_user
+      PGPASSWORD: sync_pass
+      PGDATABASE: sync_apis
     depends_on:
       - db
     volumes:
