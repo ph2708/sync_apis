@@ -572,10 +572,24 @@ def main():
     parser.add_argument('--plates', help='Comma-separated list of plates to operate on (overrides discovery)')
     args = parser.parse_args()
 
-    # load environment from .env (if present in same directory)
+    # load environment from repository root .env (do not override existing env vars)
     here = os.path.dirname(__file__)
-    # Do not override existing environment variables
-    load_dotenv(os.path.join(here, '.env'), override=False)
+    repo_root = os.path.abspath(os.path.join(here, '..'))
+    load_dotenv(os.path.join(repo_root, '.env'), override=False)
+
+    # Re-read Postgres-related env vars after loading .env so module-level
+    # defaults (evaluated at import time) are updated with values from .env.
+    global PG_DSN, PG_HOST, PG_PORT, PG_DB, PG_USER, PG_PASSWORD
+    PG_DSN = os.getenv('DATABASE_URL') or PG_DSN
+    PG_HOST = os.getenv('PGHOST', PG_HOST or 'localhost')
+    PG_PORT = os.getenv('PGPORT', PG_PORT or '5432')
+    PG_DB = os.getenv('PGDATABASE') or PG_DB
+    PG_USER = os.getenv('PGUSER') or PG_USER
+    PG_PASSWORD = os.getenv('PGPASSWORD') or PG_PASSWORD
+    # Re-read e-Track API credentials as well so auth() sees .env values
+    global ETRAC_USER, ETRAC_KEY
+    ETRAC_USER = os.getenv('ETRAC_USER') or ETRAC_USER
+    ETRAC_KEY = os.getenv('ETRAC_KEY') or ETRAC_KEY
 
     session = requests.Session()
     conn = pg_connect()

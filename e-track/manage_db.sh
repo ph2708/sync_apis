@@ -7,10 +7,11 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE"
 
-# carrega .env se existir
-if [ -f .env ]; then
+# carrega .env do repositório (raiz) se existir
+REPO_ROOT="$(cd "$HERE/.." && pwd)"
+if [ -f "$REPO_ROOT/.env" ]; then
   # shellcheck disable=SC1091
-  source .env
+  source "$REPO_ROOT/.env"
 fi
 
 # valores padrão (podem ser sobrescritos por .env ou ambiente)

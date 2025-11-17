@@ -38,6 +38,7 @@ Comandos úteis
 Troubleshooting
 ---------------
 - Se o coletor não conectar ao Postgres, verifique as variáveis `PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD` (veja `.env` ou `.env.example`).
+ - Se o coletor não conectar ao Postgres, verifique as variáveis `PGHOST`/`PGPORT`/`PGUSER`/`PGPASSWORD` (veja o `.env` na raiz do repositório ou `../.env.example`).
 - Se o erro for de autenticação com a API, revalide `ETRAC_USER` e `ETRAC_KEY`.
 - Para inspecionar a base, use:
 	```bash
@@ -49,8 +50,9 @@ Se quiser que eu adicione exemplos de queries comuns ou um script `e-track/queri
 Manual passo-a-passo (e-Track)
 1) Preparar variáveis de ambiente
 ```bash
-cp .env.example .env
-# editar .env se necessário (ETRAC_USER, ETRAC_KEY, PG* vars)
+# copie o exemplo do repositório raiz e edite os valores lá
+cp ../.env.example ../.env
+# editar ../.env se necessário (ETRAC_USER, ETRAC_KEY, PG* vars)
 ```
 
 2) Subir o Postgres central (na raiz do repositório)

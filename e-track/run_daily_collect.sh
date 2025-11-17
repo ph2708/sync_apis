@@ -6,11 +6,12 @@ set -euo pipefail
 HERE="$(cd "$(dirname "$0")" && pwd)"
 cd "$HERE"
 
-# load .env if present (do not override already exported vars)
-if [ -f .env ]; then
+# load .env from repository root if present (do not override already exported vars)
+REPO_ROOT="$(cd "$HERE/.." && pwd)"
+if [ -f "$REPO_ROOT/.env" ]; then
   # shellcheck disable=SC1090
   set -o allexport
-  . ./.env
+  . "$REPO_ROOT/.env"
   set +o allexport
 fi
 

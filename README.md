@@ -87,8 +87,11 @@ docker compose -f db/docker-compose.yml exec -T db \
 Auvo (sincronizador):
 
 ```bash
-python3 auvo/auvo_sync.py --db-wait 2
-# ou iniciar a UI leve
+# Exemplos — se estiver dentro da pasta `auvo` execute:
+#   python3 auvo_sync.py --db-wait 2
+# Se estiver na raiz do repositório execute:
+#   python3 auvo/auvo_sync.py --db-wait 2
+# Para iniciar a UI leve (a partir da pasta `auvo`):
 python3 auvo/web_ui.py
 # abrir http://127.0.0.1:5000
 ```

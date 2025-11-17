@@ -112,8 +112,9 @@ Comandos úteis (resumo)
 Manual passo-a-passo (Auvo)
 1) Preparar variáveis de ambiente
 ```bash
-cp .env.example .env
-# editar .env (ou usar o .env na raiz) para ajustar PGHOST/PGPORT/PGUSER/PGPASSWORD
+# copie o exemplo do repositório raiz e edite os valores lá
+cp ../.env.example ../.env
+# editar ../.env para ajustar AUVO_API_KEY, PG* vars etc.
 ```
 
 2) Subir o Postgres central (de dentro do repositório raiz)
@@ -176,18 +177,18 @@ python3 run_migration.py
 
 Variáveis de ambiente importantes
 - `AUVO_API_KEY`, `AUVO_API_TOKEN` — credenciais Auvo (se não estiverem em env, o script usa valores de teste no código).
-- `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` — conexão Postgres usada por `run_migration.py` e por `auvo_sync.py`.
+- `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` — conexão Postgres (configure no `.env` na raiz do repositório).
 
 Usando um único arquivo de configuração
-- Há um arquivo de exemplo `.env.example` na raiz do projeto `auvo/`.
-- Para usar, copie e preencha os valores (não comite suas chaves reais):
+- Use o `.env` na raiz do repositório como fonte de verdade para as variáveis de conexão com o DB e variáveis comuns.
+- Para criar o `.env` na raiz a partir do exemplo:
 
 ```bash
-cp .env.example .env
-# editar .env e preencher suas credenciais
+cp ../.env.example ../.env
+# editar ../.env e preencher suas credenciais
 ```
 
-O script `run-sync.sh` já carrega variáveis de `.env` automaticamente se o arquivo existir.
+O script `run-sync.sh` já carrega variáveis de `../.env` automaticamente se o arquivo existir.
 
 Notas e compatibilidade
 - O código atual espera Postgres; a flag `--db` (SQLite) foi removida. Se precisar compatibilidade SQLite temporária, posso reintroduzir a opção.

@@ -8,4 +8,4 @@ venv/
 env/
 ENV/
 pip-wheel-metadata/
-.python-version
+.python-version.env

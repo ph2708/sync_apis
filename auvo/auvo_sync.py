@@ -1,5 +1,30 @@
 #!/usr/bin/env python3
 import os
+# Attempt to load .env from repo root or project folder so scripts work
+# when invoked directly (without running the wrapper that sources .env).
+here = os.path.dirname(__file__)
+repo_root = os.path.abspath(os.path.join(here, '..'))
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(repo_root, '.env'), override=False)
+    load_dotenv(os.path.join(here, '.env'), override=False)
+except Exception:
+    # lightweight fallback: parse KEY=VALUE lines and export if not present
+    def _source_env(path):
+        if not os.path.isfile(path):
+            return
+        with open(path, 'r', encoding='utf-8') as fh:
+            for ln in fh:
+                ln = ln.strip()
+                if not ln or ln.startswith('#') or '=' not in ln:
+                    continue
+                k, v = ln.split('=', 1)
+                k = k.strip()
+                v = v.strip().strip('"').strip("'")
+                if k and k not in os.environ:
+                    os.environ[k] = v
+    _source_env(os.path.join(repo_root, '.env'))
+    _source_env(os.path.join(here, '.env'))
 import time
 import requests
 import json
@@ -10,6 +35,7 @@ from datetime import datetime
 
 import psycopg2
 import psycopg2.extras
+from psycopg2 import sql
 
 API_BASE = os.getenv('AUVO_API_BASE', 'https://api.auvo.com.br/v2')
 API_KEY = os.getenv('AUVO_API_KEY')
@@ -300,28 +326,116 @@ def extract_normalized(table, item):
 
 
 def upsert(conn, table, item):
-    pk = get_pk_from_item(item)
-    if not pk:
-        pk = str(uuid.uuid4())
     cur = conn.cursor()
-    # use psycopg2 Json adapter so JSONB is stored correctly
     norm = extract_normalized(table, item)
-    # Build upsert with normalized columns included when available
-    cols = ['id', 'data']
-    vals = [pk, psycopg2.extras.Json(item)]
-    updates = ['data = EXCLUDED.data', 'fetched_at = now()']
-    for k, v in norm.items():
-        if v is not None:
-            cols.append(k)
-            vals.append(v)
-            updates.append(f"{k} = EXCLUDED.{k}")
 
-    cols_sql = ', '.join(cols) + ', fetched_at'
-    placeholders = ', '.join(['%s'] * len(vals)) + ', now()'
-    update_sql = ', '.join(updates)
-    sql = f"INSERT INTO {table} ({cols_sql}) VALUES ({placeholders}) ON CONFLICT (id) DO UPDATE SET {update_sql}"
-    cur.execute(sql, tuple(vals))
-    conn.commit()
+    # Get table column info for current search_path/schema
+    cur.execute("SELECT column_name, data_type FROM information_schema.columns WHERE table_name = %s", (table,))
+    cols_info = {r[0]: r[1] for r in cur.fetchall()}
+
+    # Determine primary identifier strategy
+    pk = get_pk_from_item(item)
+    id_is_int = cols_info.get('id') in ('bigint', 'integer', 'smallint')
+
+    found_id = None
+    # Try to match by numeric id when possible
+    if pk is not None and id_is_int:
+        try:
+            pk_int = int(pk)
+            cur.execute(f"SELECT id FROM {table} WHERE id = %s LIMIT 1", (pk_int,))
+            row = cur.fetchone()
+            if row:
+                found_id = row[0]
+        except Exception:
+            # not numeric; skip
+            pass
+
+    # Try to match by external_id if available
+    if found_id is None and 'external_id' in cols_info:
+        ext = None
+        # try common keys
+        for k in ('externalId', 'external_id', 'externalid'):
+            if isinstance(item, dict) and k in item and item[k] not in (None, ''):
+                ext = item[k]
+                break
+        if ext is not None:
+            cur.execute(sql.SQL("SELECT id FROM {} WHERE external_id = %s LIMIT 1").format(sql.Identifier(table)), (ext,))
+            row = cur.fetchone()
+            if row:
+                found_id = row[0]
+
+    # If table has id column but it's serial (int) and we don't have a numeric pk,
+    # we will INSERT without id so DB assigns one. Otherwise we use provided pk.
+    insert_cols = []
+    insert_vals = []
+    update_assigns = []
+
+    # Always include 'data' JSONB if column exists
+    if 'data' in cols_info:
+        insert_cols.append('data')
+        insert_vals.append(psycopg2.extras.Json(item))
+        update_assigns.append('data = EXCLUDED.data')
+
+    # include normalized columns only if present in table
+    for k, v in norm.items():
+        if k in cols_info and v is not None:
+            insert_cols.append(k)
+            insert_vals.append(v)
+            update_assigns.append(f"{k} = EXCLUDED.{k}")
+
+    # fetched_at column name differs in migrations; try both
+    if 'fetched_at' in cols_info:
+        fetched_col = 'fetched_at'
+    elif 'created_at' in cols_info:
+        fetched_col = 'created_at'
+    else:
+        fetched_col = None
+
+    if fetched_col:
+        # add fetched_at/created_at on insert (use now()) by adding to SQL directly
+        pass
+
+    try:
+        if found_id is not None:
+            # perform UPDATE for existing row
+            sets = ['data = %s', 'fetched_at = now()'] if 'data' in cols_info else []
+            params = [psycopg2.extras.Json(item)] if 'data' in cols_info else []
+            for k, v in norm.items():
+                if k in cols_info and v is not None:
+                    sets.append(f"{k} = %s")
+                    params.append(v)
+            params.append(found_id)
+            sql_upd = f"UPDATE {table} SET {', '.join(sets)} WHERE id = %s"
+            cur.execute(sql_upd, tuple(params))
+            conn.commit()
+            print(f"[DB] Updated {table} id={found_id}")
+            return
+
+        # No existing row found — perform INSERT.
+        # If id column exists and is integer and pk is non-numeric, skip id column.
+        include_id = False
+        if 'id' in cols_info and not id_is_int:
+            include_id = True
+        if include_id and pk is not None:
+            insert_cols.insert(0, 'id')
+            insert_vals.insert(0, pk)
+
+        cols_sql = ', '.join(insert_cols)
+        placeholders = ', '.join(['%s'] * len(insert_vals))
+        if fetched_col:
+            cols_sql = cols_sql + f', {fetched_col}'
+            placeholders = placeholders + ', now()'
+
+        if cols_sql.strip() == '':
+            # nothing to insert
+            cur.execute("INSERT INTO %s DEFAULT VALUES" % table)
+        else:
+            cur.execute(sql.SQL("INSERT INTO {} ({}) VALUES ({})").format(sql.Identifier(table), sql.SQL(cols_sql), sql.SQL(placeholders)), tuple(insert_vals))
+        conn.commit()
+        print(f"[DB] Inserted into {table}")
+    except Exception as e:
+        # re-raise for visibility
+        raise
 
 
 def main():
@@ -354,6 +468,54 @@ def main():
     if conn is None:
         print('Não foi possível conectar ao Postgres. Abortando.')
         return
+
+    # Log connection info (no password) and active search_path
+    try:
+        cur = conn.cursor()
+        # show search_path to help find which schema the tables are created in
+        cur.execute("SHOW search_path")
+        sp = cur.fetchone()
+        print(f"[DB] Connected to {PG_HOST}:{PG_PORT}/{PG_DB} as {PG_USER}; search_path={sp[0] if sp else ''}")
+    except Exception as e:
+        print(f"[DB] Connected but could not retrieve search_path: {e}")
+
+    # Ensure project schema `auvo` exists and is used instead of `public`.
+    schema = 'auvo'
+    try:
+        cur = conn.cursor()
+        cur.execute(sql.SQL("CREATE SCHEMA IF NOT EXISTS {}").format(sql.Identifier(schema)))
+        cur.execute(sql.SQL("SET search_path TO {}, public").format(sql.Identifier(schema)))
+        conn.commit()
+        print(f"[DB] Usando schema: {schema}")
+    except Exception as e:
+        print(f"[DB] Não foi possível criar/usar schema {schema}: {e}")
+
+    # If a local migration file exists (prefer `schema.sql`), apply it so tables
+    # in the `auvo` schema have the expected definitions.
+    try:
+        here = os.path.dirname(__file__)
+        for fname in ('schema.sql', 'migrate_schema.sql', 'init_db.sql'):
+            path = os.path.join(here, fname)
+            if os.path.isfile(path):
+                print(f"[DB] Aplicando migration SQL: {fname}")
+                with open(path, 'r', encoding='utf-8') as fh:
+                    sql_text = fh.read()
+                stmts = [s.strip() for s in sql_text.split(';') if s.strip()]
+                sql_keywords = ('CREATE', 'ALTER', 'DROP', 'SET', 'GRANT', 'REVOKE', 'COMMENT', 'INSERT', 'UPDATE', 'DELETE', 'CREATE INDEX')
+                for s in stmts:
+                    # skip non-SQL descriptive blocks
+                    up = s.upper()
+                    if not any(up.startswith(kw) for kw in sql_keywords):
+                        print(f"[DB] pulando bloco não-SQL no {fname}: {s[:80]!r}")
+                        continue
+                    try:
+                        cur.execute(s)
+                    except Exception as exs:
+                        print(f"[DB] aviso ao aplicar stmt do {fname}: {exs}")
+                conn.commit()
+                break
+    except Exception as e:
+        print(f"[DB] Erro ao aplicar migrations locais: {e}")
 
     ensure_tables(conn)
 

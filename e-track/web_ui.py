@@ -18,6 +18,7 @@ from html import escape
 from dotenv import load_dotenv
 from datetime import datetime
 import logging
+import os
 
 # logging for the web UI
 LOG_LEVEL = os.getenv('ETRAC_LOG_LEVEL', 'INFO').upper()
@@ -27,7 +28,9 @@ logger = logging.getLogger('e-track.web_ui')
 
 # load .env if present
 here = os.path.dirname(__file__)
-load_dotenv(os.path.join(here, '.env'))
+# load .env from repository root if present (do not override existing env vars)
+repo_root = os.path.abspath(os.path.join(here, '..'))
+load_dotenv(os.path.join(repo_root, '.env'), override=False)
 
 API_RESOURCES = ['terminals', 'positions', 'trips']
 
