@@ -143,14 +143,6 @@ docker compose -f db/docker-compose.yml logs --tail=200 db
 - `e-track/` — código, schema e utilitários do e-Track.
 - `.env.example` — exemplo de variáveis de ambiente de conexão com o DB.
 
-Se quiser, eu posso:
-- executar checagens rápidas nos arquivos de migration que você preferir;
-- rodar a tradução completa dos READMEs dos projetos para PT-BR;
-- ou gerar scripts para mover tabelas do schema `public` para `auvo`/`e_track`.
-
-Próximo passo recomendado: execute `./db/apply-all-migrations.sh` e me envie
-o output caso haja erros — eu analiso e corrijo o que for necessário.
-
 
 
 
