@@ -75,4 +75,3 @@ Observações:
 - `run_migration.py` já é idempotente por dia — ele checa a tabela `migrations` e não reaplica o mesmo arquivo mais de uma vez no mesmo dia.
 - Se quiser que a migração rode toda vez que o `auvo_sync.py` for executado, posso integrar uma chamada a `run_migration.py` no início de `auvo_sync.py` (opcional).
 
-Se quiser, eu já configuro a integração em `auvo_sync.py` para disparar a migração antes do sync — quer que eu faça isso agora? 

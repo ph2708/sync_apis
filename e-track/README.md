@@ -85,4 +85,44 @@ docker compose -f db/docker-compose.yml down
 
 Se quiser que eu gere um `e-track/queries.md` com consultas úteis (ex.: contar posições por placa, exportar rota), eu posso criar.
 
+Scheduler integrado (APScheduler)
+--------------------------------
+O `web_ui.py` inclui um agendador opcional que pode executar o coletor periodicamente (fetch de posições e recomputação de rotas).
+
+- Requisitos: instale o `APScheduler` no seu virtualenv:
+```bash
+.venv/bin/pip install -r requirements.txt
+```
+
+- Comportamento padrão (quando APScheduler estiver instalado):
+	- `--fetch-latest` é executado a cada 2 minutos (atualiza `positions`).
+	- `--compute-routes-current-day-all` é executado diariamente às `01:00` (recalcula/guarda rotas do dia).
+
+- Logs: as execuções agendadas gravam saídas em `e-track/logs/` (`fetch_latest.log`, `compute_routes.log`).
+
+- Observação importante: se você rodar o `web_ui.py` com um servidor que cria múltiplos processos (ex.: Gunicorn com >1 worker), cada processo pode iniciar o agendador e causar execuções duplicadas. Para produção recomendamos:
+	- Rodar o web UI com 1 worker que contém o scheduler, e usar outro processo/cron para o collector; ou
+	- Desabilitar o scheduler embutido e usar `cron`/`systemd`/`docker cron` para agendar o collector.
+
+Exemplo rápido para produção (systemd + cron recomendado):
+
+1. Instale dependências:
+```bash
+.venv/bin/pip install -r requirements.txt
+```
+
+2. Rodar apenas o web UI em Gunicorn (sem scheduler):
+```bash
+# se quiser evitar o scheduler embutido, execute com uma variável de ambiente para desativar
+DISABLE_UI_SCHEDULER=1 .venv/bin/gunicorn -w 1 -b 0.0.0.0:5001 e-track.web_ui:app
+```
+
+3. Agendar o collector via crontab (exemplo):
+```cron
+# fetch latest every 2 minutes
+*/2 * * * * cd /caminho/para/sync_apis && /caminho/para/.venv/bin/python e-track/collector.py --fetch-latest >> /var/log/etrac_fetch_latest.log 2>&1
+# recompute daily at 01:00
+0 1 * * * cd /caminho/para/sync_apis && /caminho/para/.venv/bin/python e-track/collector.py --compute-routes-current-day-all >> /var/log/etrac_routes.log 2>&1
+```
+
 

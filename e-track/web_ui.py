@@ -16,7 +16,7 @@ import psycopg2.extras
 from psycopg2 import sql
 from html import escape
 from dotenv import load_dotenv
-from datetime import datetime
+from datetime import datetime, date
 import logging
 import os
 
@@ -32,7 +32,7 @@ here = os.path.dirname(__file__)
 repo_root = os.path.abspath(os.path.join(here, '..'))
 load_dotenv(os.path.join(repo_root, '.env'), override=False)
 
-API_RESOURCES = ['terminals', 'positions', 'trips']
+API_RESOURCES = ['terminals', 'positions', 'trips', 'routes']
 
 PG_DSN = os.getenv('PG_DSN')
 PG_HOST = os.getenv('PGHOST', 'localhost')
@@ -84,6 +84,8 @@ def get_candidates(resource):
         return ['id', 'placa', 'data_transmissao', 'latitude', 'longitude', 'velocidade', 'ignicao']
     if resource == 'trips':
         return ['id', 'placa', 'cliente', 'data_inicio_conducao', 'data_fim_conducao', 'distancia_conducao']
+    if resource == 'routes':
+        return ['id', 'placa', 'rota_date', 'point_count', 'start_ts', 'end_ts']
     return []
 
 
@@ -141,7 +143,7 @@ def list_resource(resource):
     def row_to_jsonable(row):
         out = {}
         for k, v in dict(row).items():
-            if isinstance(v, datetime):
+            if isinstance(v, (datetime, date)):
                 out[k] = v.isoformat()
             else:
                 out[k] = v
@@ -162,9 +164,20 @@ def list_resource(resource):
             else:
                 sval = str(val) if val is not None else ''
             cells.append(f"<td>{escape(sval)}</td>")
+        # for routes, add a link to the map view using rota_date
+        if resource == 'routes':
+            date_val = r.get('rota_date')
+            if isinstance(date_val, (datetime, date)):
+                date_str = date_val.isoformat()
+            else:
+                date_str = str(date_val) if date_val is not None else ''
+            map_link = f"<a href='/map-route?plate={escape(str(r.get('placa') or ''))}&date={escape(date_str)}' target='_blank'>Mapa</a>"
+            cells.append(f"<td>{map_link}</td>")
         rows_html.append(f"<tr>{''.join(cells)}</tr>")
 
     header_cells = ''.join(f"<th>{c}</th>" for c in cols)
+    if resource == 'routes':
+        header_cells += '<th>Mapa</th>'
 
     html = f"""
     <html>
@@ -214,7 +227,7 @@ def show_resource(resource, row_id):
     def row_to_jsonable(row):
         out = {}
         for k, v in dict(row).items():
-            if isinstance(v, datetime):
+            if isinstance(v, (datetime, date)):
                 out[k] = v.isoformat()
             else:
                 out[k] = v
@@ -236,8 +249,7 @@ def show_resource(resource, row_id):
     return html
 
 
-if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5001, debug=True)
+
 
 
 @app.route('/api/positions/<plate>')
@@ -312,6 +324,74 @@ def api_positions_plate(plate):
         return {'positions': out}
 
 
+@app.route('/api/routes/<plate>')
+def api_routes_plate(plate):
+    """Return stored routes for a plate. Query params:
+        - date=DD/MM/YYYY or YYYY-mm-dd -> return single route points
+        - no date -> return available rota_date list for plate
+    """
+    date = request.args.get('date')
+    # parse simple date formats
+    def parse_date_str(s):
+        if not s:
+            return None
+        for fmt in ('%d/%m/%Y','%Y-%m-%d'):
+            try:
+                return datetime.strptime(s, fmt).date()
+            except Exception:
+                continue
+        try:
+            return datetime.fromisoformat(s).date()
+        except Exception:
+            return None
+
+    conn = pg_connect()
+    cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+    table_ident = sql.Identifier(ETRAC_SCHEMA, 'routes')
+    if date:
+        d = parse_date_str(date)
+        if not d:
+            conn.close()
+            return {'error': 'invalid date format, use DD/MM/YYYY or YYYY-mm-dd'}, 400
+        cur.execute(sql.SQL('SELECT points, point_count, start_ts, end_ts FROM {table} WHERE placa = %s AND rota_date = %s LIMIT 1').format(table=table_ident), (plate, d))
+        row = cur.fetchone()
+        # if route missing or sparse, attempt to refresh by calling collector (fetch history + compute route)
+        MIN_POINTS = 3
+        if (not row) or (row.get('point_count') is None) or (row.get('point_count') < MIN_POINTS):
+            # try to run collector to fetch history and recompute route for this plate/date
+            try:
+                # detect python executable in repo venv (WSL/linux style), fallback to system python
+                python_exe = os.path.join(repo_root, '.venv', 'bin', 'python')
+                if not os.path.exists(python_exe):
+                    python_exe = os.path.join(repo_root, '.venv', 'Scripts', 'python.exe')
+                if not os.path.exists(python_exe):
+                    python_exe = os.environ.get('PYTHON_EXECUTABLE') or 'python3'
+
+                date_str = d.strftime('%d/%m/%Y')
+                fetch_cmd = [python_exe, os.path.join(repo_root, 'e-track', 'collector.py'), '--fetch-history', plate, '--date', date_str]
+                compute_cmd = [python_exe, os.path.join(repo_root, 'e-track', 'collector.py'), '--compute-route-plate', plate, '--compute-route-date', date_str]
+                logger.info('Attempting on-demand refresh for route %s %s', plate, date_str)
+                # run fetch history then compute route (blocking calls)
+                subprocess.run(fetch_cmd, cwd=repo_root, timeout=120)
+                subprocess.run(compute_cmd, cwd=repo_root, timeout=120)
+                # re-query the route
+                cur.execute(sql.SQL('SELECT points, point_count, start_ts, end_ts FROM {table} WHERE placa = %s AND rota_date = %s LIMIT 1').format(table=table_ident), (plate, d))
+                row = cur.fetchone()
+            except Exception:
+                logger.exception('On-demand route refresh failed for %s %s', plate, d)
+
+        conn.close()
+        if not row:
+            return {'route': None}
+        return {'route': row.get('points'), 'point_count': row.get('point_count'), 'start_ts': row.get('start_ts').isoformat() if row.get('start_ts') else None, 'end_ts': row.get('end_ts').isoformat() if row.get('end_ts') else None}
+    # list available rota_dates for plate
+    cur.execute(sql.SQL('SELECT rota_date, point_count, created_at FROM {table} WHERE placa = %s ORDER BY rota_date DESC LIMIT 100').format(table=table_ident), (plate,))
+    rows = cur.fetchall()
+    conn.close()
+    out = [{'rota_date': r.get('rota_date').isoformat() if r.get('rota_date') else None, 'point_count': r.get('point_count'), 'created_at': r.get('created_at').isoformat() if r.get('created_at') else None} for r in rows]
+    return {'routes': out}
+
+
 @app.route('/map')
 def map_view():
     plate = request.args.get('plate', '')
@@ -371,4 +451,125 @@ def map_view():
                    .replace('%%PLATE_JSON%%', plate_json)\
                    .replace('%%DATE_JSON%%', date_json)
     return html
+
+
+
+@app.route('/map-route')
+def map_route_view():
+    plate = request.args.get('plate', '')
+    date = request.args.get('date', '')
+
+    plate_json = json.dumps(plate)
+    date_json = json.dumps(date)
+
+    template = """
+        <!doctype html>
+        <html>
+            <head>
+                <meta charset="utf-8" />
+                <title>e-Track Route Map</title>
+                <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+                <style>#map{height:90vh;}</style>
+            </head>
+            <body>
+                <h3>Route Map — placa: <b>%%PLATE_ESC%%</b> date: <b>%%DATE_ESC%%</b></h3>
+                <div id="map"></div>
+                <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+                <script>
+                const plate = %%PLATE_JSON%%;
+                const date = %%DATE_JSON%%;
+                const map = L.map('map').setView([-23.55, -46.63], 12);
+                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {maxZoom: 19}).addTo(map);
+                if (!plate || !date) {
+                    alert('Informe ?plate=PLACA&date=DD/MM/YYYY');
+                } else {
+                    const url = '/api/routes/' + encodeURIComponent(plate) + '?date=' + encodeURIComponent(date);
+                    fetch(url).then(r=>r.json()).then(j=>{
+                        const route = j.route;
+                        if (!route || route.length===0) { alert('Nenhuma rota encontrada para a placa/data'); return; }
+                        const pts = route.filter(p=>p.lat && p.lon).map(p=>[parseFloat(p.lat), parseFloat(p.lon)]);
+                        if (pts.length===0) { alert('Nenhuma posição válida na rota'); return; }
+                        const poly = L.polyline(pts, {color:'red'}).addTo(map);
+                        map.fitBounds(poly.getBounds());
+                        // start and end markers with popups including timestamp, speed and address when available
+                        const first = route.find(p=>p.lat && p.lon);
+                        const last = [...route].reverse().find(p=>p.lat && p.lon);
+                        if (first) {
+                            L.circleMarker([parseFloat(first.lat), parseFloat(first.lon)], {color:'green'}).addTo(map).bindPopup('Start: ' + first.ts + (first.vel? '<br>vel: '+first.vel:'' ) + (first.addr? '<br>'+first.addr:''));
+                        }
+                        if (last) {
+                            L.circleMarker([parseFloat(last.lat), parseFloat(last.lon)], {color:'red'}).addTo(map).bindPopup('End: ' + last.ts + (last.vel? '<br>vel: '+last.vel:'' ) + (last.addr? '<br>'+last.addr:''));
+                        }
+                        // markers for each point with popup (addr + ts + vel)
+                        route.forEach(p=>{
+                            if (p.lat && p.lon) {
+                                const m = L.circleMarker([parseFloat(p.lat), parseFloat(p.lon)], {radius:4}).addTo(map);
+                                const popup = (p.ts || '') + (p.vel !== undefined && p.vel !== null ? '<br>vel: '+p.vel : '') + (p.addr? '<br>'+p.addr : '');
+                                m.bindPopup(popup);
+                            }
+                        });
+                    }).catch(err=>{ alert('Erro carregando rota: '+err); });
+                }
+                </script>
+            </body>
+        </html>
+        """
+    html = template.replace('%%PLATE_ESC%%', escape(plate)).replace('%%DATE_ESC%%', escape(date)).replace('%%PLATE_JSON%%', plate_json).replace('%%DATE_JSON%%', date_json)
+    return html
+
+
+if __name__ == '__main__':
+    # Respect DISABLE_UI_SCHEDULER to allow running web UI and scheduler separately.
+    disable_sched = os.getenv('DISABLE_UI_SCHEDULER', '').strip().lower() in ('1', 'true', 'yes', 'y')
+    if disable_sched:
+        logger.info('DISABLE_UI_SCHEDULER is set; embedded scheduler will not start.')
+    else:
+        # Start scheduled jobs (if APScheduler is installed).
+        try:
+            from apscheduler.schedulers.background import BackgroundScheduler
+        except Exception:
+            logger.warning('APScheduler not installed; scheduled collector jobs disabled. Install with `pip install apscheduler` to enable.')
+        else:
+            import subprocess
+            # detect python executable in repo venv (WSL/linux style), fallback to python3
+            python_exe = os.path.join(repo_root, '.venv', 'bin', 'python')
+            if not os.path.exists(python_exe):
+                python_exe = os.path.join(repo_root, '.venv', 'Scripts', 'python.exe')
+            if not os.path.exists(python_exe):
+                python_exe = 'python3'
+
+            logs_dir = os.path.join(repo_root, 'e-track', 'logs')
+            os.makedirs(logs_dir, exist_ok=True)
+
+            def run_collector(cmd_args, logfile_name):
+                logfile = os.path.join(logs_dir, logfile_name)
+                cmd = [python_exe, os.path.join(repo_root, 'e-track', 'collector.py')] + cmd_args
+                logger.info('Scheduled job running: %s', ' '.join(cmd))
+                with open(logfile, 'a', encoding='utf-8') as fh:
+                    fh.write(f'--- job run at {datetime.now().isoformat()} ---\n')
+                    try:
+                        subprocess.run(cmd, cwd=repo_root, stdout=fh, stderr=fh, check=False)
+                    except Exception:
+                        logger.exception('Scheduled job failed to run: %s', cmd)
+
+            def job_fetch_latest():
+                run_collector(['--fetch-latest'], 'fetch_latest.log')
+
+            def job_compute_routes_daily():
+                run_collector(['--compute-routes-current-day-all'], 'compute_routes.log')
+
+            sched = BackgroundScheduler()
+            # fetch latest positions every 2 minutes
+            sched.add_job(job_fetch_latest, 'interval', minutes=2, id='fetch_latest')
+            # recompute routes once per day at 01:00
+            sched.add_job(job_compute_routes_daily, 'cron', hour=1, minute=0, id='compute_routes_daily')
+            sched.start()
+
+            # run an initial fetch on startup (non-blocking)
+            try:
+                job_fetch_latest()
+            except Exception:
+                logger.exception('Initial scheduled fetch failed')
+
+    app.run(host='0.0.0.0', port=5001, debug=True)
 

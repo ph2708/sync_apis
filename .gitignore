@@ -9,3 +9,4 @@ env/
 ENV/
 pip-wheel-metadata/
 .python-version.env
+logs/

@@ -27,8 +27,19 @@ PG_PASSWORD = os.getenv('PGPASSWORD') or os.getenv('AUVO_PG_PASSWORD', 'auvo_pas
 
 def pg_connect():
     if PG_DSN:
-        return psycopg2.connect(PG_DSN)
-    return psycopg2.connect(host=PG_HOST, port=PG_PORT, dbname=PG_DB, user=PG_USER, password=PG_PASSWORD)
+        conn = psycopg2.connect(PG_DSN)
+    else:
+        conn = psycopg2.connect(host=PG_HOST, port=PG_PORT, dbname=PG_DB, user=PG_USER, password=PG_PASSWORD)
+    # Ensure we use the project schema `auvo` (fall back to public)
+    try:
+        cur = conn.cursor()
+        cur.execute("CREATE SCHEMA IF NOT EXISTS auvo")
+        cur.execute("SET search_path TO auvo, public")
+        conn.commit()
+    except Exception:
+        # If setting search_path fails, return the connection anyway and let callers handle errors
+        pass
+    return conn
 
 
 app = Flask(__name__)
@@ -77,25 +88,47 @@ def list_resource(resource):
     cols = ['id', 'fetched_at']
     existing_cols = []
     try:
-      cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = %s", (resource,))
-      db_cols = {r['column_name'] for r in cur.fetchall()}
-    except Exception:
-      db_cols = set()
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = %s", (resource,))
+        db_cols = {r['column_name'] for r in cur.fetchall()}
 
-    for c in candidates.get(resource, []):
-      if c in db_cols:
-        cols.append(c)
-        existing_cols.append(c)
+        for c in candidates.get(resource, []):
+            if c in db_cols:
+                cols.append(c)
+                existing_cols.append(c)
 
-    # always include `data` as preview
-    cols.append('data')
+        # always include `data` as preview
+        cols.append('data')
 
-    select_sql = ', '.join(cols)
-    cur.execute(f"SELECT {select_sql} FROM {resource} ORDER BY fetched_at DESC LIMIT %s OFFSET %s", (page_size, offset))
-    rows = cur.fetchall()
-    cur.execute(f"SELECT COUNT(*) as cnt FROM {resource}")
-    total = cur.fetchone()['cnt']
-    conn.close()
+        select_sql = ', '.join(cols)
+        cur.execute(f"SELECT {select_sql} FROM {resource} ORDER BY fetched_at DESC LIMIT %s OFFSET %s", (page_size, offset))
+        rows = cur.fetchall()
+        cur.execute(f"SELECT COUNT(*) as cnt FROM {resource}")
+        total = cur.fetchone()['cnt']
+    except Exception as e:
+        msg = str(e)
+        if 'does not exist' in msg or 'UndefinedTable' in msg or isinstance(e, getattr(psycopg2.errors, 'UndefinedTable', Exception)):
+            html = f"""
+            <html><body>
+              <h2>Table '{resource}' not found</h2>
+              <p>The table <strong>{resource}</strong> does not exist in the connected database/schema.</p>
+              <p>Possible fixes:</p>
+              <ul>
+                <li>Run the migrations: apply <code>auvo/schema.sql</code> or <code>auvo/migrate_schema.sql</code>.</li>
+                <li>Ensure the app is connecting to the right database/schema (check <code>PG_DSN</code> or <code>PGDATABASE</code> / <code>AUVO_PG_DB</code>).</li>
+                <li>Verify the `search_path` includes the <code>auvo</code> schema.</li>
+              </ul>
+              <p><a href='/'>Back</a></p>
+            </body></html>
+            """
+            conn.close()
+            return html
+        conn.close()
+        raise
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     prev_link = f"/db/{resource}?page={page-1}&page_size={page_size}" if page > 1 else ''
     next_link = f"/db/{resource}?page={page+1}&page_size={page_size}" if offset + page_size < total else ''
@@ -150,13 +183,21 @@ def show_resource(resource, row_id):
     conn = pg_connect()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
     # fetch existing normalized columns for this resource
-    cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = %s", (resource,))
-    db_cols = {r['column_name'] for r in cur.fetchall()}
+    try:
+      cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = %s", (resource,))
+      db_cols = {r['column_name'] for r in cur.fetchall()}
+    except Exception as e:
+      msg = str(e)
+      if 'does not exist' in msg or 'UndefinedTable' in msg or isinstance(e, getattr(psycopg2.errors, 'UndefinedTable', Exception)):
+        conn.close()
+        return f"<html><body><h2>Table '{resource}' not found</h2><p>The table <strong>{resource}</strong> does not exist in the connected database/schema.</p><p>Apply the migrations (see <code>auvo/schema.sql</code>) or check your DB connection.</p><p><a href='/'>Back</a></p></body></html>"
+      conn.close()
+      raise
     # prefer the common normalized fields if present
     candidates = {
-        'users': ['name', 'login', 'email', 'user_id', 'base_lat', 'base_lon'],
-        'tasks': ['task_id', 'task_date', 'customer_id', 'latitude', 'longitude', 'task_status', 'user_from', 'user_to', 'external_id'],
-        'customers': ['customer_id', 'customer_name', 'address', 'latitude', 'longitude', 'external_id'],
+      'users': ['name', 'login', 'email', 'user_id', 'base_lat', 'base_lon'],
+      'tasks': ['task_id', 'task_date', 'customer_id', 'latitude', 'longitude', 'task_status', 'user_from', 'user_to', 'external_id'],
+      'customers': ['customer_id', 'customer_name', 'address', 'latitude', 'longitude', 'external_id'],
     }
     use_cols = [c for c in candidates.get(resource, []) if c in db_cols]
     select_cols = ', '.join(['id', 'fetched_at'] + use_cols + ['data'])

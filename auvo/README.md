@@ -193,5 +193,3 @@ O script `run-sync.sh` já carrega variáveis de `../.env` automaticamente se o 
 Notas e compatibilidade
 - O código atual espera Postgres; a flag `--db` (SQLite) foi removida. Se precisar compatibilidade SQLite temporária, posso reintroduzir a opção.
 - Há um serviço opcional para executar a migração diariamente via Docker: veja `docker-compose.cron.yml` e `docker/migration-cron`.
-
-Se quiser que eu ajuste o `auvo_sync.py` para reativar o modo SQLite ou integrar a chamada de migração automaticamente antes do sync, diga qual opção prefere.

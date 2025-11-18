@@ -20,6 +20,12 @@ from psycopg2 import sql
 import re
 from dotenv import load_dotenv
 import logging
+try:
+    # when running as part of package
+    from .http_retry import post_with_retries
+except Exception:
+    # when running as script from repository root
+    from http_retry import post_with_retries
 
 # configure logging
 LOG_LEVEL = os.getenv('ETRAC_LOG_LEVEL', 'INFO').upper()
@@ -255,7 +261,7 @@ def insert_position(conn, item):
 
 def fetch_latest_positions(session, conn):
     url = f"{API_BASE.rstrip('/')}/ultimas-posicoes"
-    r = session.post(url, auth=auth(), timeout=60)
+    r = post_with_retries(session, url, auth=auth(), timeout=60)
     r.raise_for_status()
     j = r.json()
     items = extract_list(j)
@@ -271,7 +277,7 @@ def fetch_latest_positions(session, conn):
 
 def fetch_last_position_for_plate(session, conn, placa):
     url = f"{API_BASE.rstrip('/')}/ultimaposicao"
-    r = session.post(url, auth=auth(), json={'placa': placa}, timeout=60)
+    r = post_with_retries(session, url, auth=auth(), json={'placa': placa}, timeout=60)
     r.raise_for_status()
     j = r.json()
     items = extract_list(j)
@@ -304,7 +310,7 @@ def fetch_terminal_history(session, conn, placa, data=None, inicio=None, fim=Non
     for p in candidate_paths:
         url = f"{API_BASE.rstrip('/')}/{p}"
         try:
-            r = session.post(url, auth=auth(), json=payload, timeout=60)
+            r = post_with_retries(session, url, auth=auth(), json=payload, timeout=60)
         except Exception as e:
             last_exc = e
             continue
@@ -328,6 +334,13 @@ def fetch_terminal_history(session, conn, placa, data=None, inicio=None, fim=Non
         logger.info('Fetched %d history items for plate %s from %s', len(items), placa, url)
         processed = 0
         for it in items:
+            # some installations return history items without a 'placa' field
+            # ensure the item has the requested placa so upsert/insert work
+            if not it.get('placa'):
+                try:
+                    it['placa'] = placa
+                except Exception:
+                    pass
             upsert_terminal(conn, it)
             insert_position(conn, it)
             processed += 1
@@ -355,7 +368,7 @@ def get_all_plates(session):
     for p in candidate_paths:
         url = f"{API_BASE.rstrip('/')}/{p}"
         try:
-            r = session.post(url, auth=auth(), timeout=60)
+            r = post_with_retries(session, url, auth=auth(), timeout=60)
         except Exception as e:
             last_exc = e
             logger.debug('Request to %s failed: %s', url, e)
@@ -392,7 +405,7 @@ def get_all_plates(session):
     return []
 
 
-def build_and_store_route_for_date(conn, placa, date_obj):
+def build_and_store_route_for_date(conn, placa, date_obj, session=None, min_points_for_route=3):
     """Aggregate positions for a given placa and date (datetime.date) and store into routes table.
     Returns number of points stored.
     """
@@ -422,15 +435,87 @@ def build_and_store_route_for_date(conn, placa, date_obj):
             continue
         ts = r.get('data_transmissao')
         ts_iso = ts.isoformat() if isinstance(ts, datetime) else str(ts)
-        pts.append({'lat': latf, 'lon': lonf, 'ts': ts_iso, 'vel': r.get('velocidade')})
+        # include textual address/location fields when available
+        addr = r.get('logradouro') or r.get('endereco')
+        pts.append({'lat': latf, 'lon': lonf, 'ts': ts_iso, 'vel': r.get('velocidade'), 'addr': addr})
 
     if not pts:
-        logger.info('No positions found for %s on %s', placa, date_obj)
-        return 0
+        # If we have no (or too few) positions, try to fetch terminal history from the API
+        if session is not None:
+            try:
+                logger.info('Few/no positions for %s on %s — attempting fetch_terminal_history', placa, date_obj)
+                # API expects date in DD/MM/YYYY for history endpoints
+                date_str = date_obj.strftime('%d/%m/%Y')
+                fetch_terminal_history(session, conn, placa, data=date_str)
+                # re-query positions after attempting to fetch history
+                cur.execute(
+                    """SELECT data_transmissao, latitude, longitude, velocidade, raw
+                       FROM positions
+                       WHERE placa = %s AND data_transmissao BETWEEN %s AND %s
+                       ORDER BY data_transmissao ASC
+                    """,
+                    (placa, start, end),
+                )
+                rows = cur.fetchall()
+                pts = []
+                for r in rows:
+                    lat = r.get('latitude')
+                    lon = r.get('longitude')
+                    if lat is None or lon is None:
+                        continue
+                    try:
+                        latf = float(lat)
+                        lonf = float(lon)
+                    except Exception:
+                        continue
+                    ts = r.get('data_transmissao')
+                    ts_iso = ts.isoformat() if isinstance(ts, datetime) else str(ts)
+                    pts.append({'lat': latf, 'lon': lonf, 'ts': ts_iso, 'vel': r.get('velocidade')})
+            except Exception:
+                logger.exception('History fetch failed for %s on %s', placa, date_obj)
+
+        if not pts:
+            logger.info('No positions found for %s on %s after history fetch', placa, date_obj)
+            # attempt to extract trip endpoints as fallback (trips may have lat/lon and textual locations)
+            try:
+                cur.execute(
+                    """SELECT latitude_inicio_conducao, longitude_inicio_conducao,
+                               latitude_fim_conducao, longitude_fim_conducao
+                       FROM trips
+                       WHERE placa = %s AND data_inicio_conducao BETWEEN %s AND %s
+                    """,
+                    (placa, start, end),
+                )
+                trip_rows = cur.fetchall()
+                for tr in trip_rows:
+                    lat1 = tr.get('latitude_inicio_conducao')
+                    lon1 = tr.get('longitude_inicio_conducao')
+                    lat2 = tr.get('latitude_fim_conducao')
+                    lon2 = tr.get('longitude_fim_conducao')
+                    if lat1 and lon1:
+                        try:
+                            pts.append({'lat': float(lat1), 'lon': float(lon1), 'ts': start.isoformat(), 'vel': None, 'addr': tr.get('localizacao_inicio_conducao') or None})
+                        except Exception:
+                            pass
+                    if lat2 and lon2:
+                        try:
+                            pts.append({'lat': float(lat2), 'lon': float(lon2), 'ts': end.isoformat(), 'vel': None, 'addr': tr.get('localizacao_fim_conducao') or None})
+                        except Exception:
+                            pass
+            except Exception:
+                logger.exception('Failed querying trips fallback for %s on %s', placa, date_obj)
+
+        if not pts:
+            return 0
 
     start_ts = pts[0]['ts']
     end_ts = pts[-1]['ts']
     point_count = len(pts)
+
+    # If we have too few points, optionally skip storing or still store depending on threshold
+    if point_count < min_points_for_route:
+        logger.info('Route for %s on %s has only %d points (< %d)', placa, date_obj, point_count, min_points_for_route)
+        # we still store the route (keeps generated flag), but caller may decide to ignore
 
     # insert or update routes table
     try:
@@ -485,7 +570,7 @@ def fetch_month_for_plate(session, conn, placa, year, month):
     for p in candidate_paths:
         url = f"{API_BASE.rstrip('/')}/{p}"
         try:
-            r = session.post(url, auth=auth(), timeout=60)
+            r = post_with_retries(session, url, auth=auth(), timeout=60)
         except Exception as e:
             print('Fallback: request failed for', url, e)
             continue
@@ -524,7 +609,7 @@ def fetch_month_for_plate(session, conn, placa, year, month):
 def fetch_trips(session, conn, placa, data_str):
     url = f"{API_BASE.rstrip('/')}/resumoviagens"
     payload = {'placa': placa, 'data': data_str}
-    r = session.post(url, auth=auth(), json=payload, timeout=60)
+    r = post_with_retries(session, url, auth=auth(), json=payload, timeout=60)
     r.raise_for_status()
     j = r.json()
     items = extract_list(j)
@@ -642,11 +727,18 @@ def main():
         else:
             date_obj = datetime.now().date()
         print(f'Computing route for {placa} on {date_obj}')
-        n = build_and_store_route_for_date(conn, placa, date_obj)
+        n = build_and_store_route_for_date(conn, placa, date_obj, session=session)
         print(f'Points stored: {n}')
     if args.compute_routes_current_day_all:
         now = datetime.now()
         date_obj = now.date()
+        # First, refresh latest positions from the API so new plates are discovered and stored
+        try:
+            logger.info('Refreshing latest positions from API before computing routes')
+            fetch_latest_positions(session, conn)
+        except Exception:
+            logger.exception('Failed to refresh latest positions; will still attempt to compute routes from DB')
+
         # Allow overrides: --plates-file or --plates (comma-separated)
         plates = []
         if args.plates_file:
@@ -661,24 +753,22 @@ def main():
             plates = [p.strip() for p in args.plates.split(',') if p.strip()]
             logger.info('Using %d plates from --plates', len(plates))
         else:
-            plates = get_all_plates(session)
-            if not plates:
-                # Fallback: use distinct plates already present in positions table
-                try:
-                    cur = conn.cursor()
-                    cur.execute("SELECT DISTINCT placa FROM positions WHERE placa IS NOT NULL")
-                    rows = cur.fetchall()
-                    plates = [r[0] for r in rows if r and r[0]]
-                    logger.info('Falling back to %d plates discovered in DB', len(plates))
-                except Exception:
-                    logger.exception('Failed to fetch plates from DB as fallback')
-                    plates = []
+            # Prefer plates from DB (includes newly discovered ones from fetch_latest_positions)
+            try:
+                cur = conn.cursor()
+                cur.execute("SELECT DISTINCT placa FROM positions WHERE placa IS NOT NULL")
+                rows = cur.fetchall()
+                plates = [r[0] for r in rows if r and r[0]]
+                logger.info('Discovered %d plates from DB', len(plates))
+            except Exception:
+                logger.exception('Failed to fetch plates from DB; falling back to API discovery')
+                plates = get_all_plates(session)
 
         if not plates:
             logger.warning('No plates to process for compute-routes-current-day-all')
         for p in plates:
             try:
-                build_and_store_route_for_date(conn, p, date_obj)
+                build_and_store_route_for_date(conn, p, date_obj, session=session)
             except Exception as e:
                 logger.exception('Error computing route for %s: %s', p, e)
         print('Concluído compute-routes-current-day-all')
