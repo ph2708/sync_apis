@@ -43,50 +43,55 @@ PG_PASSWORD = os.getenv('PGPASSWORD')
 ETRAC_SCHEMA = os.getenv('ETRAC_SCHEMA', 'e_track')
 
 
-def pg_connect():
-    if PG_DSN:
-        conn = psycopg2.connect(PG_DSN)
-    else:
-        if not (PG_DB and PG_USER and PG_PASSWORD):
-            raise RuntimeError('Missing Postgres configuration: set PGDATABASE, PGUSER and PGPASSWORD (or PG_DSN)')
-        conn = psycopg2.connect(host=PG_HOST, port=PG_PORT, dbname=PG_DB, user=PG_USER, password=PG_PASSWORD)
-    # set search_path to the configured schema so unqualified table names work
-    cur = conn.cursor()
-    cur.execute(sql.SQL("SET search_path = {}, public").format(sql.Identifier(ETRAC_SCHEMA)))
-    conn.commit()
-    return conn
-
-
 app = Flask(__name__)
+
+
+def pg_connect():
+    logger.debug('Connecting to Postgres: host=%s port=%s dbname=%s user=%s', PG_HOST, PG_PORT, PG_DB, PG_USER)
+    try:
+        if PG_DSN:
+            conn = psycopg2.connect(PG_DSN)
+        else:
+            missing = []
+            if not PG_DB:
+                missing.append('PGDATABASE')
+            if not PG_USER:
+                missing.append('PGUSER')
+            if not PG_PASSWORD:
+                missing.append('PGPASSWORD')
+            if missing:
+                logger.error('Missing Postgres configuration: %s', missing)
+                raise RuntimeError(f'Missing Postgres configuration: {missing}')
+            conn = psycopg2.connect(host=PG_HOST, port=PG_PORT, dbname=PG_DB, user=PG_USER, password=PG_PASSWORD)
+        # quick sanity check
+        cur = conn.cursor()
+        cur.execute('SELECT 1')
+        cur.close()
+        logger.info('Successfully connected to Postgres %s:%s/%s', PG_HOST, PG_PORT, PG_DB)
+        return conn
+    except Exception:
+        logger.exception('Failed to connect to Postgres')
+        raise
+
+
+def get_candidates(resource):
+    """Return preferred column order for `resource` to display in the UI.
+
+    The function lists high-value columns first; existing columns are
+    filtered later against the database table columns.
+    """
+    mapping = {
+        'terminals': ['placa', 'descricao', 'frota', 'equipamento_serial', 'data_gravacao', 'data_atualizacao'],
+        'positions': ['data_transmissao', 'latitude', 'longitude', 'velocidade', 'ignicao', 'logradouro', 'equipamento_serial', 'created_at'],
+        'trips': ['placa', 'cliente', 'data_inicio_conducao', 'data_fim_conducao', 'distancia_conducao', 'condutor_nome', 'created_at'],
+        'routes': ['placa', 'rota_date', 'point_count', 'start_ts', 'end_ts', 'created_at'],
+    }
+    return mapping.get(resource, ['id'])
 
 
 @app.route('/')
 def index():
-    links = ''.join([f"<li><a href='/db/{r}'>{r}</a></li>" for r in API_RESOURCES])
-    html = f"""
-    <html>
-      <head><title>e-Track DB Viewer</title></head>
-      <body>
-        <h2>e-Track DB Viewer</h2>
-        <p>Recursos disponíveis:</p>
-        <ul>{links}</ul>
-        <p>Use <code>?page=1&page_size=20</code> nos links para paginação.</p>
-      </body>
-    </html>
-    """
-    return html
-
-
-def get_candidates(resource):
-    if resource == 'terminals':
-        return ['placa', 'descricao', 'frota', 'equipamento_serial', 'data_gravacao']
-    if resource == 'positions':
-        return ['id', 'placa', 'data_transmissao', 'latitude', 'longitude', 'velocidade', 'ignicao']
-    if resource == 'trips':
-        return ['id', 'placa', 'cliente', 'data_inicio_conducao', 'data_fim_conducao', 'distancia_conducao']
-    if resource == 'routes':
-        return ['id', 'placa', 'rota_date', 'point_count', 'start_ts', 'end_ts']
-    return []
+    return f"<h1>e-track Data Browser</h1><ul>" + "".join(f"<li><a href='/db/{r}'>{r}</a></li>" for r in API_RESOURCES) + "</ul>"
 
 
 @app.route('/db/<resource>')
@@ -519,57 +524,5 @@ def map_route_view():
 
 
 if __name__ == '__main__':
-    # Respect DISABLE_UI_SCHEDULER to allow running web UI and scheduler separately.
-    disable_sched = os.getenv('DISABLE_UI_SCHEDULER', '').strip().lower() in ('1', 'true', 'yes', 'y')
-    if disable_sched:
-        logger.info('DISABLE_UI_SCHEDULER is set; embedded scheduler will not start.')
-    else:
-        # Start scheduled jobs (if APScheduler is installed).
-        try:
-            from apscheduler.schedulers.background import BackgroundScheduler
-        except Exception:
-            logger.warning('APScheduler not installed; scheduled collector jobs disabled. Install with `pip install apscheduler` to enable.')
-        else:
-            import subprocess
-            # detect python executable in repo venv (WSL/linux style), fallback to python3
-            python_exe = os.path.join(repo_root, '.venv', 'bin', 'python')
-            if not os.path.exists(python_exe):
-                python_exe = os.path.join(repo_root, '.venv', 'Scripts', 'python.exe')
-            if not os.path.exists(python_exe):
-                python_exe = 'python3'
-
-            logs_dir = os.path.join(repo_root, 'e-track', 'logs')
-            os.makedirs(logs_dir, exist_ok=True)
-
-            def run_collector(cmd_args, logfile_name):
-                logfile = os.path.join(logs_dir, logfile_name)
-                cmd = [python_exe, os.path.join(repo_root, 'e-track', 'collector.py')] + cmd_args
-                logger.info('Scheduled job running: %s', ' '.join(cmd))
-                with open(logfile, 'a', encoding='utf-8') as fh:
-                    fh.write(f'--- job run at {datetime.now().isoformat()} ---\n')
-                    try:
-                        subprocess.run(cmd, cwd=repo_root, stdout=fh, stderr=fh, check=False)
-                    except Exception:
-                        logger.exception('Scheduled job failed to run: %s', cmd)
-
-            def job_fetch_latest():
-                run_collector(['--fetch-latest'], 'fetch_latest.log')
-
-            def job_compute_routes_daily():
-                run_collector(['--compute-routes-current-day-all'], 'compute_routes.log')
-
-            sched = BackgroundScheduler()
-            # fetch latest positions every 2 minutes
-            sched.add_job(job_fetch_latest, 'interval', minutes=2, id='fetch_latest')
-            # recompute routes once per day at 01:00
-            sched.add_job(job_compute_routes_daily, 'cron', hour=1, minute=0, id='compute_routes_daily')
-            sched.start()
-
-            # run an initial fetch on startup (non-blocking)
-            try:
-                job_fetch_latest()
-            except Exception:
-                logger.exception('Initial scheduled fetch failed')
-
     app.run(host='0.0.0.0', port=5001, debug=True)
 

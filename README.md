@@ -1,5 +1,188 @@
 # Sync APIs — Monorepo
 
+Este repositório contém coletores e sincronizadores para dois serviços:
+
+- **Auvo** (pasta `auvo/`)
+- **e-Track** (pasta `e-track/`)
+
+Ambos podem compartilhar uma instância Postgres local para desenvolvimento;
+cada projeto usa um schema próprio (`auvo`, `e_track`) dentro do mesmo banco
+(`sync_apis`).
+
+Objetivo deste README: instruções rápidas para desenvolver, aplicar schemas
+e executar os componentes localmente, além dos comandos para atualizar o
+repositório (git).
+
+---
+
+## Pré-requisitos
+
+- WSL (para usuários Windows recomenda-se executar os comandos no WSL).
+- Docker & Docker Compose (CLI `docker compose`).
+- Python 3.10+ e `virtualenv` (recomendado).
+- Opcional: `psql` (cliente Postgres). Se não estiver instalado o helper usa o
+  container Postgres.
+
+---
+
+## Setup rápido (WSL)
+
+1. Criar/ativar virtualenv (recomendado):
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install --upgrade pip
+```
+
+2. Instalar dependências (opcional global ou por projeto):
+
+```bash
+# dependências de utilitários (opcional)
+pip install -r requirements.txt
+
+# dependências específicas (opcional)
+pip install -r e-track/requirements.txt
+pip install -r auvo/requirements.txt
+```
+
+3. Subir o Postgres local (servirá para ambos os projetos):
+
+```bash
+docker compose -f db/docker-compose.yml up -d
+docker compose -f db/docker-compose.yml ps
+docker compose -f db/docker-compose.yml logs -f db
+```
+
+4. Aplicar migrations/schemas (helper):
+
+```bash
+./db/apply-all-migrations.sh
+```
+
+O helper aplica os SQLs necessários (scripts em `db/init/`, `e-track/schema.sql`,
+`auvo/schema.sql`). Se `psql` não existir no WSL, o script executa `psql`
+dentro do container.
+
+5. Verificar que os schemas/tabelas existem:
+
+```bash
+docker compose -f db/docker-compose.yml exec -T db \
+  psql -U sync_user -d sync_apis -c "\dt e_track.*"
+
+docker compose -f db/docker-compose.yml exec -T db \
+  psql -U sync_user -d sync_apis -c "\dt auvo.*"
+```
+
+---
+
+## Como rodar os componentes localmente
+
+- e-Track (coletor básico):
+
+```bash
+python3 e-track/collector.py --fetch-latest
+```
+
+- e-Track — UI leve para navegar nos dados (local):
+
+```bash
+python3 e-track/web_ui.py
+# acessível em http://0.0.0.0:5001
+```
+
+- Auvo (sincronizador):
+
+```bash
+python3 auvo/auvo_sync.py --db-wait 2
+python3 auvo/web_ui.py  # se presente
+```
+
+---
+
+## Comandos para atualizar o repositório (git)
+
+Use estes comandos para enviar alterações ao remoto. Ajuste o `branch` conforme
+o seu fluxo (branch por feature/bugfix é recomendado).
+
+1) Verificar o que mudou:
+
+```bash
+git status --short
+```
+
+2) Preparar alterações:
+
+```bash
+git add <arquivo1> <arquivo2>
+# ou adicionar tudo (use com cuidado):
+git add -A
+```
+
+3) Commitar com mensagem clara:
+
+```bash
+git commit -m "descrição curta e informativa das alterações"
+```
+
+4) Publicar (push):
+
+```bash
+# se estiver em main (evite push direto em main se equipe usar PRs)
+git push origin main
+
+# recomendado: criar branch, push e abrir PR
+git checkout -b feat/nome-da-feature
+git push -u origin feat/nome-da-feature
+```
+
+5) Atualizar branch local com remoto antes de trabalhar (pull/rebase):
+
+```bash
+git fetch origin
+git switch main
+git pull --rebase origin main
+```
+
+---
+
+## Troubleshooting rápido
+
+- `psql: command not found`: instale cliente Postgres no WSL:
+
+```bash
+sudo apt update && sudo apt install -y postgresql-client
+```
+
+- Ver logs do Postgres container:
+
+```bash
+docker compose -f db/docker-compose.yml logs --tail=200 db
+```
+
+- Tabelas criadas no schema errado: verifique se `schema.sql` define
+  `SET search_path` e execute `./db/apply-all-migrations.sh` novamente.
+
+---
+
+## Arquivos importantes
+
+- `db/` — compose e scripts de inicialização do Postgres.
+- `db/apply-all-migrations.sh` — aplica schemas/migrations.
+- `e-track/` — coletor, runners, UI e utilitários de backfill.
+- `auvo/` — sincronizador e utilitários Auvo.
+
+---
+
+Se quiser, eu posso:
+
+- deixar um `README.pt-BR.md` com exemplos por comando (`collector.py` flags),
+- adicionar um `CONTRIBUTING.md` com convenções de commits e branch names,
+- gerar scripts de `make` ou `just` para simplificar os passos mais comuns.
+
+Diga qual desses extras você prefere que eu adicione primeiro.
+# Sync APIs — Monorepo
+
 Este repositório reúne coletores/sincronizadores (Auvo e e-Track) organizados
 para compartilhar uma única instância Postgres em desenvolvimento, usando
 schemas separados (`auvo` e `e_track`) dentro do mesmo banco `sync_apis`.

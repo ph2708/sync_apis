@@ -1,3 +1,168 @@
+# e-Track — Backfill & Scheduling (consolidado)
+
+Este documento unifica instruções de *backfill*, execução e *scheduling* do
+coletor e-Track. Objetivo: ter um guia único e curto para executar o coletor,
+fazer backfills históricos e instalar jobs em `cron`/`systemd` ou via
+`docker-compose`.
+
+Sumário
+- Visão rápida
+- Backfill (objetivo + uso)
+- Scheduler / Deployment (systemd, cron, docker)
+- Execução local / UI
+- Boas práticas e troubleshooting
+
+---
+
+Visão rápida
+-----------
+
+- `collector.py` — principal script que consulta a API e insere posições/rotas
+  no Postgres.
+- `daily_routes_runner.py` — runner pensado para executar uma vez por dia
+  (cron/systemd) e gerar rotas diárias para todas as placas.
+- `backfill_controller.py` — controladora para popular ranges de datas
+  históricas por placa.
+
+Backfill (o que e como)
+-----------------------
+
+Objetivo: preencher a tabela `routes` com rotas históricas por placa/data.
+
+Uso rápido (exemplo):
+
+```bash
+cd /path/to/sync_apis
+.venv/bin/python e-track/backfill_controller.py \
+  --date-start 2025-01-01 --date-end 2025-01-07 \
+  --plates-file plates.txt --sleep 0.5
+```
+
+Pontos importantes:
+- O backfill processa placas em batches, respeitando `ETRAC_RATE_SLEEP` entre
+  placas para evitar rate-limit da API.
+- `e-track/http_retry.py` aplica retries exponenciais para requests HTTP.
+- Lock IDs padrões: `ETRAC_DAILY_LOCK_ID=123456789` e
+  `ETRAC_BACKFILL_LOCK_ID=987654321` (podem ser sobrescritos por env).
+
+Scheduler / Deployment
+----------------------
+
+Você pode executar o coletor por `systemd`, `cron` ou como um serviço Docker.
+
+Opção A — systemd (recomendada para servidores)
+
+Crie um unit file, ex.: `/etc/systemd/system/etrac-collector.service` com:
+
+```ini
+[Unit]
+Description=e-Track Collector
+After=network.target
+
+[Service]
+Type=simple
+User=youruser
+WorkingDirectory=/path/to/sync_apis
+Environment=PGHOST=127.0.0.1
+Environment=PGPORT=5432
+Environment=PGDATABASE=sync_apis
+Environment=PGUSER=sync_user
+Environment=PGPASSWORD=sync_pass
+Environment=ETRAC_USER=your_api_user
+Environment=ETRAC_KEY=your_api_key
+ExecStart=/path/to/.venv/bin/python e-track/collector.py --fetch-latest --loop
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Notas:
+- Use `--loop` se quiser que o coletor permaneça rodando em ciclo; caso
+  contrário, prefira agendar via cron com execuções independentes.
+
+Opção B — cron (simples e portátil)
+
+Exemplo crontab (`crontab -e`):
+
+```cron
+*/2 * * * * cd /path/to/sync_apis && /path/to/.venv/bin/python e-track/collector.py --fetch-latest >> /var/log/etrac_fetch_latest.log 2>&1
+0 1 * * * cd /path/to/sync_apis && /path/to/.venv/bin/python e-track/collector.py --compute-routes-current-day-all >> /var/log/etrac_routes.log 2>&1
+```
+
+Opção C — docker-compose sidecar
+
+Você pode adicionar um serviço que execute o coletor em loop com `sleep`.
+Exemplo simples no `docker-compose.override.yml`:
+
+```yaml
+services:
+  etrac-collector:
+    image: python:3.11-slim
+    working_dir: /app
+    volumes:
+      - ./:/app:ro
+    command: bash -c "while true; do /usr/local/bin/python /app/e-track/collector.py --fetch-latest >> /app/e-track/logs/fetch_latest.log 2>&1; sleep 120; done"
+    environment:
+      - PGHOST=db
+      - PGPORT=5432
+      - PGDATABASE=sync_apis
+      - PGUSER=sync_user
+      - PGPASSWORD=sync_pass
+      - ETRAC_USER=${ETRAC_USER}
+      - ETRAC_KEY=${ETRAC_KEY}
+    depends_on:
+      - db
+```
+
+Desabilitar scheduler embutido na UI
+-----------------------------------
+
+Se você executar o collector separadamente (systemd/cron/docker), defina na
+UI `DISABLE_UI_SCHEDULER=1` para evitar execução duplicada de jobs. Exemplo
+com `gunicorn`:
+
+```bash
+DISABLE_UI_SCHEDULER=1 .venv/bin/gunicorn -w 1 -b 0.0.0.0:5001 e-track.web_ui:app
+```
+
+Execução local / On-demand
+--------------------------
+
+- Para gerar rotas do dia atual (único-run):
+
+```bash
+python3 e-track/collector.py --compute-routes-current-day-all
+```
+
+- Para fetch de posições mais recentes:
+
+```bash
+python3 e-track/collector.py --fetch-latest
+```
+
+Boas práticas e recomendações
+----------------------------
+
+- Comece com `ETRAC_RATE_SLEEP=0.2-1.0` e `batch-size` pequeno; aumente com
+  cuidado conforme estabilidade da API.
+- Execute backfills durante a madrugada para reduzir impacto em produção e
+  para evitar bater limites de API.
+- Monitore logs (`e-track/logs/` ou `journalctl` / `docker logs`).
+
+Troubleshooting rápido
+---------------------
+
+- Se não encontrar rotas após o backfill, verifique se o collector conseguiu
+  buscar o histórico (`--fetch-history`) e se a tabela `routes` contém os
+  registros esperados.
+- Ver logs do collector para ver erros HTTP ou exceções.
+
+---
+
+Se quiser, eu deixo este README ainda mais curto (cheat-sheet) ou então crio
+o `systemd` unit file e um script para instalar as entradas de `cron` — diga
+qual você prefere.
 # e-Track collector
 
 Este projeto faz parte do monorepo `sync_apis`.
