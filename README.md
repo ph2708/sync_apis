@@ -1,9 +1,3 @@
-Claro! Aqui está uma **versão reorganizada, limpa e mais objetiva** do seu README — mantendo todas as informações importantes, mas estruturadas de forma clara, com seções bem definidas e hierarquia simples.
-
-Se quiser, posso gerar também uma versão **pt-BR** e uma versão **en-US**, ou separar em vários arquivos (`README`, `CONTRIBUTING`, `docs/setup.md`, etc.).
-
----
-
 # 📦 Sync APIs — Monorepo
 
 Coletor e sincronizador de dados dos serviços **Auvo** e **e-Track**, organizados em um único repositório e compartilhando o mesmo banco Postgres (schemas separados).
