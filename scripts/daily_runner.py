@@ -28,6 +28,8 @@ from typing import Optional
 from dotenv import load_dotenv
 # Delay importing APScheduler until we actually schedule the recurring job so
 # that `--once` can run without APScheduler installed (useful for minimal runs).
+import psycopg2
+import psycopg2.extras
 
 
 load_dotenv()
@@ -57,6 +59,14 @@ def job_run_all():
 
     auvo_cmd = os.getenv('AUVO_CMD', 'python3 auvo/auvo_sync.py --db-wait 2')
     etrac_cmd = os.getenv('ETRAC_CMD', 'python3 e-track/collector.py --fetch-latest')
+    # command to compute routes after fetching positions
+    etrac_routes_cmd = os.getenv('ETRAC_ROUTES_CMD', 'python3 e-track/collector.py --compute-routes-current-day-all')
+    # trips fetching configuration (disabled by default)
+    run_etrac_trips = os.getenv('RUN_ETRAC_TRIPS', '0') != '0'
+    etrac_trips_cmd_tpl = os.getenv('ETRAC_TRIPS_CMD', 'python3 e-track/collector.py --fetch-trips {plate} --date {date}')
+    etrac_trips_date = os.getenv('ETRAC_TRIPS_DATE')  # if None, we will default to yesterday when running
+    etrac_trips_sleep = float(os.getenv('ETRAC_TRIPS_SLEEP', '0.3'))
+    plates_file_env = os.getenv('PLATES_FILE') or os.getenv('ETRAC_PLATES_FILE')
 
     if run_auvo:
         rc = run_command(auvo_cmd)
@@ -67,6 +77,60 @@ def job_run_all():
         rc = run_command(etrac_cmd)
         if rc != 0:
             LOG.warning('e-Track job retornou código %s', rc)
+
+        # optionally compute routes after fetching latest positions
+        run_etrac_compute = os.getenv('RUN_ETRAC_COMPUTE', '1') != '0'
+        if run_etrac_compute:
+            rc2 = run_command(etrac_routes_cmd)
+            if rc2 != 0:
+                LOG.warning('e-Track compute-routes job retornou código %s', rc2)
+
+        # optionally fetch trips (resumo de viagens) per plate
+        if run_etrac_trips:
+            LOG.info('RUN_ETRAC_TRIPS enabled — collecting trips for date=%s', etrac_trips_date or '(default=yesterday)')
+            # determine date default (yesterday) if not provided
+            if not etrac_trips_date:
+                from datetime import datetime, timedelta
+                etrac_trips_date = (datetime.now() - timedelta(days=1)).date().isoformat()
+
+            # build list of plates: prefer PLATES_FILE if provided, else query DB
+            plates = []
+            if plates_file_env and os.path.isfile(plates_file_env):
+                try:
+                    with open(plates_file_env, 'r', encoding='utf-8') as fh:
+                        plates = [l.strip() for l in fh if l.strip()]
+                    LOG.info('Loaded %d plates from file %s', len(plates), plates_file_env)
+                except Exception:
+                    LOG.exception('Failed reading plates file %s', plates_file_env)
+
+            if not plates:
+                # query DB for distinct plates in positions
+                try:
+                    pg_host = os.getenv('PGHOST', 'localhost')
+                    pg_port = int(os.getenv('PGPORT', '5432'))
+                    pg_db = os.getenv('PGDATABASE')
+                    pg_user = os.getenv('PGUSER')
+                    pg_pass = os.getenv('PGPASSWORD')
+                    if not (pg_db and pg_user and pg_pass):
+                        LOG.error('PGDATABASE/PGUSER/PGPASSWORD not set — cannot query plates from DB')
+                    else:
+                        conn = psycopg2.connect(host=pg_host, port=pg_port, dbname=pg_db, user=pg_user, password=pg_pass)
+                        cur = conn.cursor()
+                        cur.execute("SELECT DISTINCT placa FROM e_track.positions WHERE placa IS NOT NULL")
+                        rows = cur.fetchall()
+                        plates = [r[0] for r in rows if r and r[0]]
+                        conn.close()
+                        LOG.info('Discovered %d plates from DB', len(plates))
+                except Exception:
+                    LOG.exception('Failed to query plates from Postgres')
+
+            # iterate plates and run trips command for each
+            for p in plates:
+                cmd = etrac_trips_cmd_tpl.format(plate=p, date=etrac_trips_date)
+                rc3 = run_command(cmd)
+                if rc3 != 0:
+                    LOG.warning('fetch-trips for %s returned %s', p, rc3)
+                time.sleep(etrac_trips_sleep)
 
     LOG.info('Execução diária finalizada')
 
