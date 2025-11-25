@@ -33,7 +33,7 @@ numeric_level = getattr(logging, LOG_LEVEL, logging.INFO)
 logging.basicConfig(level=numeric_level, format='%(asctime)s %(levelname)s %(name)s: %(message)s')
 logger = logging.getLogger('e-track.collector')
 
-API_BASE = os.getenv('ETRAC_API_BASE', 'http://api.etrac.com.br/monitoramento')
+API_BASE = os.getenv('ETRAC_API_BASE', 'https://api.etrac.com.br/monitoramento')
 ETRAC_USER = os.getenv('ETRAC_USER')
 ETRAC_KEY = os.getenv('ETRAC_KEY')
 
