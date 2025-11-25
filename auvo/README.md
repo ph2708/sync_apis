@@ -179,6 +179,15 @@ Variáveis de ambiente importantes
 - `AUVO_API_KEY`, `AUVO_API_TOKEN` — credenciais Auvo (se não estiverem em env, o script usa valores de teste no código).
 - `PGHOST`, `PGPORT`, `PGUSER`, `PGPASSWORD`, `PGDATABASE` — conexão Postgres (configure no `.env` na raiz do repositório).
 
+Nota sobre configuração centralizada
+-----------------------------------
+
+Recomendamos usar o `.env` na raiz do repositório como fonte de verdade para
+variáveis comuns (PG* e chaves API). O arquivo `.env.example` foi atualizado
+com novas chaves usadas pelo projeto (por exemplo `ETRAC_API_BASE` para o
+coletor `e-track`). Não comite o `.env` com credenciais sensíveis — use
+`.env.example` como modelo.
+
 Usando um único arquivo de configuração
 - Use o `.env` na raiz do repositório como fonte de verdade para as variáveis de conexão com o DB e variáveis comuns.
 - Para criar o `.env` na raiz a partir do exemplo:

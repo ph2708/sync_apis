@@ -25,6 +25,57 @@ repositório (git).
 
 ---
 
+## Atualizações recentes (nota rápida)
+
+- 2025-11-25: Ajustado o coletor `e-track` para preferir HTTPS por padrão.
+	- Variável de ambiente `ETRAC_API_BASE` foi adicionada ao `.env.example` e ao `.env` de exemplo para apontar para `https://api.etrac.com.br/monitoramento`.
+	- O helper de requisições `e-track/http_retry.py` foi melhorado para:
+		- Normalizar timeouts numéricos para um par (connect, read), reduzindo o tempo de conexão padrão para falhar mais rápido em problemas de rede;
+		- Adicionar jitter ao backoff exponencial para evitar picos de retry simultâneos;
+		- Incluir o tipo da exceção nos logs para facilitar diagnóstico (ex.: ConnectTimeout).
+	- Recomendação: configure `ETRAC_API_BASE` no seu `.env` local (não comitar `.env`) para controlar ambiente (staging/prod/dev) sem tocar no código.
+
+	## Serviço diário (rodar jobs de Auvo + e-Track)
+
+	Adicionei um runner simples que agenda a execução diária dos jobs de sincronização
+	de ambos os projetos. Opções de deployment:
+
+	- Executar localmente com o virtualenv (recomendado):
+
+	```bash
+	# a partir da raiz do repositório
+	./scripts/run_daily.sh
+	# para execução única (útil para teste):
+	./scripts/run_daily.sh --once
+	```
+
+	- systemd (exemplo): copie os arquivos em `deploy/systemd/` para `/etc/systemd/system/`,
+		ajuste `WorkingDirectory` e `ExecStart` no unit file e habilite:
+
+	```bash
+	sudo cp deploy/systemd/sync-apis-daily.service /etc/systemd/system/sync-apis-daily.service
+	sudo cp deploy/systemd/sync-apis-daily.timer /etc/systemd/system/sync-apis-daily.timer
+	sudo systemctl daemon-reload
+	sudo systemctl enable --now sync-apis-daily.timer
+	```
+
+	- Docker Compose (exemplo): há um `docker-compose.daily.yml` que cria um
+		container para executar o runner. Ajuste variáveis de ambiente conforme
+		necessário:
+
+	```bash
+	docker compose -f docker-compose.daily.yml up -d
+	```
+
+	Configuração via ENV (opcional):
+	- `DAILY_RUN_HOUR` e `DAILY_RUN_MINUTE` — hora e minuto da execução diária (padrão 01:05)
+	- `RUN_AUVO`, `RUN_ETRAC` — setar 0 para pular execução de um dos jobs
+	- `AUVO_CMD`, `ETRAC_CMD` — comandos customizados para executar os jobs
+
+	Logs: o runner escreve em stdout/stderr; quando rodando via systemd use `journalctl -u sync-apis-daily.service`.
+
+
+
 ## Setup rápido (WSL)
 
 1. Criar/ativar virtualenv (recomendado):

@@ -398,13 +398,22 @@ def upsert(conn, table, item):
     try:
         if found_id is not None:
             # perform UPDATE for existing row
-            sets = ['data = %s', 'fetched_at = now()'] if 'data' in cols_info else []
-            params = [psycopg2.extras.Json(item)] if 'data' in cols_info else []
+            sets = []
+            params = []
+            if 'data' in cols_info:
+                sets.append('data = %s')
+                params.append(psycopg2.extras.Json(item))
+            # Use fetched_col (which may be 'fetched_at' or 'created_at') if present
+            if fetched_col:
+                sets.append(f"{fetched_col} = now()")
             for k, v in norm.items():
                 if k in cols_info and v is not None:
                     sets.append(f"{k} = %s")
                     params.append(v)
             params.append(found_id)
+            if not sets:
+                # nothing to update
+                return
             sql_upd = f"UPDATE {table} SET {', '.join(sets)} WHERE id = %s"
             cur.execute(sql_upd, tuple(params))
             conn.commit()

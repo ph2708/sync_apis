@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS users (
   id BIGSERIAL PRIMARY KEY,
   external_id TEXT,
   data JSONB,
-  created_at TIMESTAMP DEFAULT now()
+  fetched_at TIMESTAMP DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS customers (
@@ -18,7 +18,7 @@ CREATE TABLE IF NOT EXISTS customers (
   latitude DOUBLE PRECISION,
   longitude DOUBLE PRECISION,
   data JSONB,
-  created_at TIMESTAMP DEFAULT now()
+  fetched_at TIMESTAMP DEFAULT now()
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -33,7 +33,7 @@ CREATE TABLE IF NOT EXISTS tasks (
   task_status INTEGER,
   external_id TEXT,
   data JSONB,
-  created_at TIMESTAMP DEFAULT now()
+  fetched_at TIMESTAMP DEFAULT now()
 );
 
 -- Indexes useful for joins/queries

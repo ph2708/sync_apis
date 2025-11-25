@@ -210,6 +210,25 @@ Troubleshooting
 	PGPASSWORD=sync_pass psql -h 127.0.0.1 -U sync_user -d sync_apis -c "\dt e_track.*"
 	```
 
+Notas sobre configuração da API e comportamento de retry
+-------------------------------------------------------
+
+- Variável `ETRAC_API_BASE`: a base da API e-Track pode ser configurada via
+  `ETRAC_API_BASE` no `.env` (ex.: `https://api.etrac.com.br/monitoramento`).
+  Coloque essa variável no `.env` da raiz para alternar ambientes sem editar
+  o código. O `.env.example` foi atualizado para documentar essa variável.
+
+- Conexões e timeouts: o helper `e-track/http_retry.py` agora normaliza
+  timeouts numéricos para um par (connect, read) e aplica um connect timeout
+  mais curto por padrão (para detectar falhas de conexão rapidamente).
+
+- Comportamento de retry: o helper adiciona jitter ao backoff e faz logs
+  mais expressivos (incluindo o tipo da exceção, ex.: ConnectTimeout), o que
+  facilita diagnosticar problemas de rede versus problemas do servidor.
+
+- Observação operacional: muitos servidores não respondem ou bloqueiam porta
+  80. Recomendamos usar `https://` na `ETRAC_API_BASE` quando possível.
+
 Se quiser que eu adicione exemplos de queries comuns ou um script `e-track/queries.md`, eu posso gerar.
 
 Manual passo-a-passo (e-Track)

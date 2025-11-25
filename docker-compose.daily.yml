@@ -1,0 +1,16 @@
+version: '3.8'
+services:
+  sync-daily:
+    image: python:3.11-slim
+    container_name: sync_apis_daily
+    working_dir: /app
+    volumes:
+      - ./:/app:ro
+    command: bash -lc "pip install -r requirements.txt && python3 /app/scripts/daily_runner.py"
+    environment:
+      - DAILY_RUN_HOUR=1
+      - DAILY_RUN_MINUTE=5
+      - RUN_AUVO=1
+      - RUN_ETRAC=1
+    restart: unless-stopped
+    networks: []

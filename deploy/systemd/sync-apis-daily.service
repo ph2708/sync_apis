@@ -1,0 +1,13 @@
+[Unit]
+Description=Sync APIs daily runner
+After=network.target
+
+[Service]
+Type=simple
+User=%i
+WorkingDirectory=/path/to/sync_apis
+ExecStart=/path/to/sync_apis/scripts/run_daily.sh
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

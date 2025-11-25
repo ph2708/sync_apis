@@ -15,7 +15,8 @@ ALTER TABLE users
   ADD COLUMN IF NOT EXISTS email TEXT,
   ADD COLUMN IF NOT EXISTS user_id BIGINT,
   ADD COLUMN IF NOT EXISTS base_lat DOUBLE PRECISION,
-  ADD COLUMN IF NOT EXISTS base_lon DOUBLE PRECISION;
+  ADD COLUMN IF NOT EXISTS base_lon DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS fetched_at TIMESTAMP DEFAULT now();
 
 -- TASKS: add normalized columns
 ALTER TABLE tasks
@@ -28,6 +29,8 @@ ALTER TABLE tasks
   ADD COLUMN IF NOT EXISTS user_from BIGINT,
   ADD COLUMN IF NOT EXISTS user_to BIGINT,
   ADD COLUMN IF NOT EXISTS external_id TEXT;
+  -- ensure fetched_at exists for compatibility with current upsert logic
+  ALTER TABLE tasks ADD COLUMN IF NOT EXISTS fetched_at TIMESTAMP DEFAULT now();
 
 -- CUSTOMERS: add normalized columns
 ALTER TABLE customers
@@ -36,7 +39,8 @@ ALTER TABLE customers
   ADD COLUMN IF NOT EXISTS customer_name TEXT,
   ADD COLUMN IF NOT EXISTS address TEXT,
   ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION,
-  ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION;
+  ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION,
+  ADD COLUMN IF NOT EXISTS fetched_at TIMESTAMP DEFAULT now();
 
 -- Backfill users
 UPDATE users SET
