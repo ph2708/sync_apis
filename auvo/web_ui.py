@@ -17,18 +17,42 @@ from html import escape
 
 API_RESOURCES = ['users', 'tasks', 'customers']
 
+# DB config (support both generic PG_* and AUVO-prefixed env vars)
 PG_DSN = os.getenv('PG_DSN') or os.getenv('AUVO_PG_DSN')
 PG_HOST = os.getenv('PGHOST') or os.getenv('AUVO_PG_HOST', 'localhost')
 PG_PORT = os.getenv('PGPORT') or os.getenv('AUVO_PG_PORT', '5432')
-PG_DB = os.getenv('PGDATABASE') or os.getenv('AUVO_PG_DB', 'auvo')
-PG_USER = os.getenv('PGUSER') or os.getenv('AUVO_PG_USER', 'auvo')
-PG_PASSWORD = os.getenv('PGPASSWORD') or os.getenv('AUVO_PG_PASSWORD', 'auvo_pass')
+PG_DB = os.getenv('PGDATABASE') or os.getenv('AUVO_PG_DB')
+PG_USER = os.getenv('PGUSER') or os.getenv('AUVO_PG_USER')
+PG_PASSWORD = os.getenv('PGPASSWORD') or os.getenv('AUVO_PG_PASSWORD')
 
 
 def pg_connect():
+    """Connect to Postgres using PG_DSN or individual PG_* env vars."""
     if PG_DSN:
         return psycopg2.connect(PG_DSN)
+    # Require DB env values when DSN isn't provided — let psycopg2 raise if missing
     return psycopg2.connect(host=PG_HOST, port=PG_PORT, dbname=PG_DB, user=PG_USER, password=PG_PASSWORD)
+
+
+def pg_connect_with_schema():
+    """Return a connection and set the search_path to AUVO_PG_SCHEMA (default 'auvo').
+
+    This lets the web UI query unqualified table names (users, tasks, customers)
+    that live in the `auvo` schema created by the sync scripts.
+    """
+    conn = pg_connect()
+    schema = os.getenv('AUVO_PG_SCHEMA', 'auvo')
+    if schema:
+        try:
+            cur = conn.cursor()
+            cur.execute(f"SET search_path TO {schema}, public")
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+    return conn
 
 
 app = Flask(__name__)
@@ -65,33 +89,46 @@ def list_resource(resource):
         page_size = 20
     offset = (page - 1) * page_size
 
-    conn = pg_connect()
+    conn = pg_connect_with_schema()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
 
     # Decide which normalized columns to include in the listing (if they exist)
     candidates = {
-      'users': ['name', 'login', 'email', 'user_id', 'base_lat', 'base_lon'],
-      'tasks': ['task_id', 'task_date', 'customer_id', 'latitude', 'longitude', 'task_status', 'user_from', 'user_to', 'external_id'],
-      'customers': ['customer_id', 'customer_name', 'address', 'latitude', 'longitude', 'external_id'],
+        'users': ['name', 'login', 'email', 'user_id', 'base_lat', 'base_lon'],
+        'tasks': ['task_id', 'task_date', 'customer_id', 'latitude', 'longitude', 'task_status', 'user_from', 'user_to', 'external_id'],
+        'customers': ['customer_id', 'customer_name', 'address', 'latitude', 'longitude', 'external_id'],
     }
-    cols = ['id', 'fetched_at']
-    existing_cols = []
-    try:
-      cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = %s", (resource,))
-      db_cols = {r['column_name'] for r in cur.fetchall()}
-    except Exception:
-      db_cols = set()
 
+    # discover columns for this table
+    try:
+        cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = %s", (resource,))
+        db_cols = {r['column_name'] for r in cur.fetchall()}
+    except Exception:
+        db_cols = set()
+
+    # build the list of columns to SELECT
+    cols = ['id']
+    # timestamp column may be 'fetched_at' or 'created_at'
+    ts_col = None
+    if 'fetched_at' in db_cols:
+        ts_col = 'fetched_at'
+    elif 'created_at' in db_cols:
+        ts_col = 'created_at'
+    if ts_col:
+        cols.append(ts_col)
+
+    existing_cols = []
     for c in candidates.get(resource, []):
-      if c in db_cols:
-        cols.append(c)
-        existing_cols.append(c)
+        if c in db_cols:
+            cols.append(c)
+            existing_cols.append(c)
 
     # always include `data` as preview
     cols.append('data')
 
     select_sql = ', '.join(cols)
-    cur.execute(f"SELECT {select_sql} FROM {resource} ORDER BY fetched_at DESC LIMIT %s OFFSET %s", (page_size, offset))
+    order_by = ts_col or 'id'
+    cur.execute(f"SELECT {select_sql} FROM {resource} ORDER BY {order_by} DESC LIMIT %s OFFSET %s", (page_size, offset))
     rows = cur.fetchall()
     cur.execute(f"SELECT COUNT(*) as cnt FROM {resource}")
     total = cur.fetchone()['cnt']
@@ -102,16 +139,16 @@ def list_resource(resource):
 
     rows_html = []
     for r in rows:
-      rid = escape(str(r['id']))
-      fetched = escape(str(r.get('fetched_at', '')))
-      preview = escape(json.dumps(r.get('data', {}), ensure_ascii=False))[:300]
-      # Build row with normalized columns when available
-      cells = [f"<td><a href='/db/{resource}/{rid}'>{rid}</a></td>", f"<td>{fetched}</td>"]
-      for c in existing_cols:
-        val = r.get(c)
-        cells.append(f"<td>{escape(str(val)) if val is not None else ''}</td>")
-      cells.append(f"<td><pre style='white-space:pre-wrap'>{preview}</pre></td>")
-      rows_html.append(f"<tr>{''.join(cells)}</tr>")
+        rid = escape(str(r['id']))
+        fetched = escape(str(r.get(ts_col, '')))
+        preview = escape(json.dumps(r.get('data', {}), ensure_ascii=False))[:300]
+        # Build row with normalized columns when available
+        cells = [f"<td><a href='/db/{resource}/{rid}'>{rid}</a></td>", f"<td>{fetched}</td>"]
+        for c in existing_cols:
+            val = r.get(c)
+            cells.append(f"<td>{escape(str(val)) if val is not None else ''}</td>")
+        cells.append(f"<td><pre style='white-space:pre-wrap'>{preview}</pre></td>")
+        rows_html.append(f"<tr>{''.join(cells)}</tr>")
 
     html = f"""
     <html>
@@ -127,7 +164,7 @@ def list_resource(resource):
           <thead>
             <tr>
               <th>id</th>
-              <th>fetched_at</th>
+              <th>{ts_col or 'timestamp'}</th>
               {''.join(f'<th>{c}</th>' for c in existing_cols)}
               <th>data (preview)</th>
             </tr>
@@ -147,11 +184,13 @@ def list_resource(resource):
 def show_resource(resource, row_id):
     if resource not in API_RESOURCES:
         abort(404)
-    conn = pg_connect()
+    conn = pg_connect_with_schema()
     cur = conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
+
     # fetch existing normalized columns for this resource
     cur.execute("SELECT column_name FROM information_schema.columns WHERE table_name = %s", (resource,))
     db_cols = {r['column_name'] for r in cur.fetchall()}
+
     # prefer the common normalized fields if present
     candidates = {
         'users': ['name', 'login', 'email', 'user_id', 'base_lat', 'base_lon'],
@@ -159,13 +198,25 @@ def show_resource(resource, row_id):
         'customers': ['customer_id', 'customer_name', 'address', 'latitude', 'longitude', 'external_id'],
     }
     use_cols = [c for c in candidates.get(resource, []) if c in db_cols]
-    select_cols = ', '.join(['id', 'fetched_at'] + use_cols + ['data'])
-    cur.execute(f"SELECT {select_cols} FROM {resource} WHERE id = %s", (row_id,))
+
+    # choose timestamp column
+    if 'fetched_at' in db_cols:
+        ts_col = 'fetched_at'
+    elif 'created_at' in db_cols:
+        ts_col = 'created_at'
+    else:
+        ts_col = None
+
+    select_cols = ['id'] + ([ts_col] if ts_col else []) + use_cols + ['data']
+    select_cols_sql = ', '.join(select_cols)
+    cur.execute(f"SELECT {select_cols_sql} FROM {resource} WHERE id = %s", (row_id,))
     row = cur.fetchone()
     conn.close()
     if not row:
         abort(404)
+
     pretty = json.dumps(row.get('data', {}), ensure_ascii=False, indent=2)
+
     # build a small table of normalized fields if present
     norm_html = ''
     if use_cols:
